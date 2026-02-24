@@ -21,7 +21,7 @@ class ObjectQueryServer(Node):
         self.declare_parameter('3dmap_path', 'data/Util/Final_GS.npz')
         self.declare_parameter('map_path', 'data/Util/Final_SEM_GS_converted.npz')
         self.declare_parameter('semantic_path', 'data/Util/Final_SEM_GS_converted_meta.json')
-        self.declare_parameter('auto_align', True) 
+        self.declare_parameter('auto_align', False) 
 
         map_3d_path = self.get_parameter('3dmap_path').get_parameter_value().string_value
         map_path = self.get_parameter('map_path').get_parameter_value().string_value
@@ -190,7 +190,7 @@ class ObjectQueryServer(Node):
         floor_mean = np.mean(floor_pts, axis=0)
         centered_floor = floor_pts - floor_mean
         u, s, vh = np.linalg.svd(centered_floor, full_matrices=False)
-        normal = vh[2, :] 
+        normal = -vh[2, :] 
 
         target_axis = np.array([0, 0, 1])
         rot_axis = np.cross(normal, target_axis)
