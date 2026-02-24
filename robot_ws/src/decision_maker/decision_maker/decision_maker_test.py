@@ -431,20 +431,26 @@ class DecisionMakingNode(Node):
             self.get_logger().info(f"🚀 Sending Nav Goal: ({x:.2f}, {y:.2f})")
             
             fut = self.nav_client.send_goal_async(goal, feedback_callback=self._on_nav_feedback)
-            rclpy.spin_until_future_complete(self, fut)
+            start = time.time()
+            while not fut.done():
+                if time.time() - start > 10.0:
+                    self.get_logger().error("⏰ NAV goal send timeout")
+                    return False
+                time.sleep(0.05)
+
             gh = fut.result()
             if not gh.accepted:
                 self.get_logger().warn("NAV goal rejected.")
                 return False
 
             res_future = gh.get_result_async()
-            rclpy.spin_until_future_complete(self, res_future, timeout_sec=150.0)
-            
-            if not res_future.done():
-                self.get_logger().warn("⏰ NAV timeout.")
-                self._send_cancel()
-                return False
-
+            start = time.time()
+            while not res_future.done():
+                if time.time() - start > 150.0:
+                    self.get_logger().warn("⏰ NAV timeout")
+                    self._send_cancel()
+                    return False
+                time.sleep(0.1)
             self.get_logger().info("✅ NAV success.")
             return True
 
@@ -471,19 +477,26 @@ class DecisionMakingNode(Node):
             goal.object_id = obj
             goal.target_bin = ''
             fut = self.grasp_client.send_goal_async(goal)
-            rclpy.spin_until_future_complete(self, fut)
+            start = time.time()
+            while not fut.done():
+                if time.time() - start > 10.0:
+                    self.get_logger().error("⏰ NAV goal send timeout")
+                    return False
+                time.sleep(0.05)
+
             handle = fut.result()
             if not handle.accepted:
                 self.get_logger().warn("GRASP rejected.")
                 return False
 
             res_future = handle.get_result_async()
-            rclpy.spin_until_future_complete(self, res_future, timeout_sec=10.0)
-            
-            if not res_future.done():
-                self.get_logger().warn("⏰ GRASP timeout.")
-                self._send_cancel()
-                return False
+            start = time.time()
+            while not res_future.done():
+                if time.time() - start > 150.0:
+                    self.get_logger().warn("⏰ NAV timeout")
+                    self._send_cancel()
+                    return False
+                time.sleep(0.1)
 
             result = res_future.result().result
             if not result.success:
