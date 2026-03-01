@@ -3,6 +3,10 @@ import queue
 import time
 import math
 from typing import List, Optional
+import yaml
+import numpy as np
+import cv2
+import os
 
 import rclpy
 from rclpy.node import Node
@@ -19,6 +23,109 @@ from .command_types import Command
 from .scenario_library import SCENARIO_REGISTRY
 from .nl_planner import WorldModel
 
+
+class MapVisualizer:
+    """Thread-safe OpenCV visualizer with a dedicated GUI loop thread.
+    Keeps an internal display buffer which other threads update via methods.
+    The GUI thread performs cv2.imshow/cv2.waitKey to ensure proper display.
+    """
+    def __init__(self, map_yaml_path: str, logger):
+        import threading as _th
+        self.logger = logger
+        if not os.path.exists(map_yaml_path):
+            raise FileNotFoundError(map_yaml_path)
+
+        with open(map_yaml_path, 'r') as f:
+            cfg = yaml.safe_load(f)
+
+        self.resolution = float(cfg.get('resolution', 0.05))
+        self.origin = cfg.get('origin', [0.0, 0.0, 0.0])
+
+        map_dir = os.path.dirname(map_yaml_path)
+        image_file = cfg.get('image')
+        if image_file is None:
+            raise ValueError('map yaml missing image field')
+
+        image_path = os.path.join(map_dir, image_file)
+        if not os.path.exists(image_path):
+            raise FileNotFoundError(image_path)
+
+        img = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
+        if img is None:
+            raise ValueError(f'failed to load map image {image_path}')
+
+        # Normalize image to 3-channel BGR if necessary
+        if img.ndim == 2:
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        elif img.shape[2] == 4:
+            # drop alpha by converting to BGR
+            img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+
+        self.map_image = img
+        self.h, self.w = self.map_image.shape[:2]
+        self.window_name = 'map_visualizer'
+
+        # thread-safe buffer and controls
+        self._lock = _th.Lock()
+        self._buffer = self.map_image.copy()
+        self._stop = _th.Event()
+
+        # start GUI thread
+        self._thread = _th.Thread(target=self._gui_loop, daemon=True)
+        self._thread.start()
+        self.logger.info(f'📍 MapVisualizer initialized: {self.w}x{self.h}, res={self.resolution:.3f}m/px')
+
+    def world_to_pixel(self, x: float, y: float) -> tuple:
+        px = int((x - self.origin[0]) / self.resolution)
+        py = int((y - self.origin[1]) / self.resolution)
+        py = self.h - py
+        return px, py
+
+    def reset(self):
+        with self._lock:
+            self._buffer = self.map_image.copy()
+
+    def draw_marker(self, x: float, y: float, label: str = '', color=(0, 255, 255), radius: int = 10):
+        px, py = self.world_to_pixel(x, y)
+        with self._lock:
+            if 0 <= px < self.w and 0 <= py < self.h:
+                cv2.circle(self._buffer, (px, py), radius, color, -1)
+                cv2.circle(self._buffer, (px, py), radius + 2, (255, 255, 255), 2)
+                if label:
+                    cv2.putText(self._buffer, label, (px + 12, py - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                    cv2.putText(self._buffer, label, (px + 12, py - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 1)
+                self.logger.info(f"Drew '{label}' at world({x:.2f},{y:.2f}) -> pixel({px},{py})")
+                return True
+            else:
+                self.logger.warn(f"Marker out of bounds: world({x:.2f},{y:.2f}) -> pixel({px},{py})")
+                return False
+
+    def _gui_loop(self):
+        # create window in this thread
+        cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
+        while not self._stop.is_set():
+            with self._lock:
+                frame = self._buffer.copy()
+            cv2.imshow(self.window_name, frame)
+            # small wait to process GUI events
+            key = cv2.waitKey(50)
+            if key == 27:  # ESC to close
+                self._stop.set()
+                break
+        try:
+            cv2.destroyWindow(self.window_name)
+        except Exception:
+            pass
+
+    def stop(self):
+        try:
+            self._stop.set()
+            if hasattr(self, '_thread'):
+                self._thread.join(timeout=1.0)
+        except Exception:
+            pass
+
+
 class DecisionMakingNode(Node):
     def __init__(self):
         super().__init__('decision_making_node')
@@ -28,14 +135,50 @@ class DecisionMakingNode(Node):
         self._shutdown = threading.Event()
         self.world = WorldModel()
 
-        # ====== 🛠️ MAP CALIBRATION CONFIG 🛠️ ======
-        # Your specific values are applied here
-        self.tx = 4.4          # Translation X
-        self.ty = 0.1           # Translation Y
-        self.yaw = 0.593       # Rotation (radians)
-        self.scale_x = 1.0      # Scale X
-        self.scale_y = 1.0     # Scale Y (Flip Y axis)
-        # ==========================================
+        # ====== 🛠️ MAP CALIBRATION CONFIG (3D->2D YAML) 🛠️ ======
+        # Load 3D->2D transform parameters from YAML
+        self.declare_parameter('map3d_to_map2d_yaml', 'data/Util/alignment.yaml')
+        yaml_path = self.get_parameter('map3d_to_map2d_yaml').get_parameter_value().string_value
+        
+        self.map2d_params = None
+        if yaml_path:
+            # Support both absolute and relative paths
+            if not os.path.isabs(yaml_path):
+                # Try relative to workspace or current directory
+                yaml_path = os.path.abspath(yaml_path)
+            
+            if os.path.exists(yaml_path):
+                try:
+                    self.map2d_params = load_map3d_to_map2d(yaml_path)
+                    self.get_logger().info(f'✅ Loaded 3D->2D transform from: {yaml_path}')
+                except Exception as e:
+                    self.get_logger().error(f'❌ Failed loading 3D->2D yaml: {e}')
+                    import traceback
+                    traceback.print_exc()
+            else:
+                self.get_logger().error(f'❌ YAML file not found: {yaml_path}')
+        else:
+            self.get_logger().warn('⚠️ No map3d_to_map2d_yaml specified, 3D->2D transform disabled')
+        # ==========================================================
+
+        # ====== Map visualizer (direct OpenCV display) ======
+        # Optional parameter to point to map yaml (PNG must be next to it)
+        try:
+            self.declare_parameter('map_yaml', 'data/lab/kachaka_native.yaml')
+            map_yaml = self.get_parameter('map_yaml').get_parameter_value().string_value
+            if map_yaml and not os.path.isabs(map_yaml):
+                map_yaml = os.path.abspath(map_yaml)
+            if map_yaml and os.path.exists(map_yaml):
+                try:
+                    self.visualizer = MapVisualizer(map_yaml, self.get_logger())
+                except Exception as e:
+                    self.get_logger().error(f"❌ Failed to init MapVisualizer: {e}")
+                    self.visualizer = None
+            else:
+                self.visualizer = None
+        except Exception:
+            self.visualizer = None
+        
 
         # ====== ROS entities ======
         self.sub_manual = self.create_subscription(String, '/manual_command', self.on_text_event, 10)
@@ -58,12 +201,16 @@ class DecisionMakingNode(Node):
         self.get_logger().info("🧭 DecisionMakingNode ready with 3D->2D Map Calibration.")
 
     # =============================================================
-    # SENSOR LOOP
+    # SENSOR LOOP (Removed spin_once to avoid conflict with MultiThreadedExecutor)
     # =============================================================
     def sensor_processing_loop(self):
+        """Background thread for sensor data processing.
+        Note: Actual spinning is handled by MultiThreadedExecutor in main().
+        """
         rate = self.create_rate(10)
         while not self._shutdown.is_set():
-            rclpy.spin_once(self, timeout_sec=0.0)
+            # Process sensor data here if needed
+            # DO NOT call rclpy.spin_once() - causes race condition with executor
             rate.sleep()
 
     # =============================================================
@@ -156,26 +303,17 @@ class DecisionMakingNode(Node):
         return True
 
     # =============================================================
-    # 📐 MAP TRANSFORM HELPER
+    # 📐 MAP TRANSFORM HELPER (3D->2D with plane_fit + sim2)
     # =============================================================
-    def _apply_transform(self, x_in: float, y_in: float) -> tuple:
-        """Converts 3D Map Coordinates -> 2D Navigation Coordinates"""
-        # 1. Flip (Scale)
-        # FIXED: Updated variable names to match __init__ (self.scale_x, etc.)
-        x_flipped = x_in * self.scale_x
-        y_flipped = y_in * self.scale_y
-
-        # 2. Rotate
-        c = math.cos(self.yaw)
-        s = math.sin(self.yaw)
-        x_rot = x_flipped * c - y_flipped * s
-        y_rot = x_flipped * s + y_flipped * c
-
-        # 3. Translate
-        x_final = x_rot + self.tx
-        y_final = y_rot + self.ty
-
-        return x_final, y_final
+    def _apply_transform(self, x_in: float, y_in: float, z_in: float = 0.0) -> tuple:
+        """Converts 3D Map Coordinates -> 2D Navigation Coordinates using YAML params"""
+        if self.map2d_params is None:
+            self.get_logger().warn('⚠️ No 3D->2D params loaded, returning raw (x,y)')
+            return (x_in, y_in)
+        
+        mu, e1, e2, s, R, t = self.map2d_params
+        xy = map3d_point_to_map2d_xy((x_in, y_in, z_in), mu, e1, e2, s, R, t)
+        return (float(xy[0]), float(xy[1]))
 
     # =============================================================
     # OBJECT QUERY WRAPPER
@@ -190,12 +328,13 @@ class DecisionMakingNode(Node):
         req.name = object_name
         future = self.obj_client.call_async(req)
 
+        # Wait for result (MultiThreadedExecutor handles spinning)
         start = time.time()
-        while rclpy.ok() and not future.done():
-            rclpy.spin_once(self, timeout_sec=0.1)
+        while not future.done():
             if time.time() - start > timeout_sec:
-                self.get_logger().warn(f"⏰ Object query timeout.")
+                self.get_logger().warn(f"⏰ Object query timeout for '{object_name}'.")
                 return None
+            time.sleep(0.05)  # Small sleep to avoid busy waiting
 
         result = future.result()
         if result is None or not result.found:
@@ -203,17 +342,29 @@ class DecisionMakingNode(Node):
             return None
 
         # --- TRANSFORM LOGIC ---
-        # Get raw coordinates (x, y) from the 3D map
+        # Get raw coordinates (x, y, z) from the 3D map
         raw_x = result.position.x
-        raw_y = result.position.y 
+        raw_y = result.position.y
+        raw_z = result.position.z
         
-        # Apply the bridge calibration
-        nav_x, nav_y = self._apply_transform(raw_x, raw_y)
+        # Apply the 3D->2D calibration (plane_fit + sim2)
+        nav_x, nav_y = self._apply_transform(raw_x, raw_y, raw_z)
         
         self.get_logger().info(f"✅ Found '{object_name}'")
         self.get_logger().info(f"   Raw 3D: ({raw_x:.2f}, {raw_y:.2f})")
         self.get_logger().info(f"   Nav 2D: ({nav_x:.2f}, {nav_y:.2f})")
         
+        # Visualize on desktop map window (direct OpenCV display)
+        try:
+            if hasattr(self, 'visualizer') and self.visualizer:
+                # reset to base map and draw marker
+                self.visualizer.reset()
+                self.visualizer.draw_marker(nav_x, nav_y, label=object_name, color=(0, 255, 255), radius=12)
+                # show briefly (non-blocking)
+                self.visualizer.show(wait_ms=1)
+        except Exception as e:
+            self.get_logger().warn(f"⚠️ Visualization error: {e}")
+
         return (nav_x, nav_y, 0.0)
 
     # =============================================================
@@ -233,7 +384,7 @@ class DecisionMakingNode(Node):
             # CASE A: Planner sent coordinates (e.g., "goto:-0.27, 1.76, -0.97")
             if ',' in payload:
                 parts = [float(v) for v in payload.split(',')]
-                raw_x, raw_y = parts[0], parts[1]
+                raw_x, raw_y, raw_z = parts[0], parts[1], parts[2]
                 if len(parts) > 2: 
                     # We typically don't transform theta unless the map is rotated 90/180 deg
                     # For now, we pass theta through, or you can add self.yaw to it if needed.
@@ -241,9 +392,22 @@ class DecisionMakingNode(Node):
 
                 # === APPLY TRANSFORM HERE ===
                 # The planner sends RAW 3D coordinates. We must convert to NAV coordinates.
-                x, y = self._apply_transform(raw_x, raw_y)
+                x, y = self._apply_transform(raw_x, raw_y, raw_z)
                 
-                self.get_logger().info(f"🔄 Transformed: ({raw_x:.2f}, {raw_y:.2f}) -> ({x:.2f}, {y:.2f})")
+                self.get_logger().info(f"🔄 Transformed: ({raw_x:.2f}, {raw_y:.2f}, {raw_z:.2f}) -> ({x:.2f}, {y:.2f})")
+                # show marker on map for this nav target
+                try:
+                    if hasattr(self, 'visualizer') and self.visualizer:
+                        self.visualizer.reset()
+                        self.visualizer.draw_marker(x, y, label='NAV_TARGET', color=(0, 0, 255), radius=14)
+                        if th is not None:
+                            # draw a simple orientation arrow (approx)
+                            end_px, end_py = self.visualizer.world_to_pixel(x + 0.5 * math.cos(th), y + 0.5 * math.sin(th))
+                            start_px, start_py = self.visualizer.world_to_pixel(x, y)
+                            cv2.arrowedLine(self.visualizer.display, (start_px, start_py), (end_px, end_py), (0, 0, 255), 3, tipLength=0.3)
+                        self.visualizer.show(wait_ms=1)
+                except Exception:
+                    pass
             
             # CASE B: Object Name "goto:chair" (Fallback if planner didn't resolve it)
             else:
@@ -252,7 +416,7 @@ class DecisionMakingNode(Node):
                 if not pos:
                     return False
                 x, y, _ = pos
-                th = 0.0 
+                th = 0.0
 
             # --- SEND TO NAV2 ---
             if not self.nav_client.wait_for_server(timeout_sec=10.0):
@@ -267,20 +431,26 @@ class DecisionMakingNode(Node):
             self.get_logger().info(f"🚀 Sending Nav Goal: ({x:.2f}, {y:.2f})")
             
             fut = self.nav_client.send_goal_async(goal, feedback_callback=self._on_nav_feedback)
-            rclpy.spin_until_future_complete(self, fut)
+            start = time.time()
+            while not fut.done():
+                if time.time() - start > 10.0:
+                    self.get_logger().error("⏰ NAV goal send timeout")
+                    return False
+                time.sleep(0.05)
+
             gh = fut.result()
             if not gh.accepted:
                 self.get_logger().warn("NAV goal rejected.")
                 return False
 
             res_future = gh.get_result_async()
-            rclpy.spin_until_future_complete(self, res_future, timeout_sec=150.0)
-            
-            if not res_future.done():
-                self.get_logger().warn("⏰ NAV timeout.")
-                self._send_cancel()
-                return False
-
+            start = time.time()
+            while not res_future.done():
+                if time.time() - start > 150.0:
+                    self.get_logger().warn("⏰ NAV timeout")
+                    self._send_cancel()
+                    return False
+                time.sleep(0.1)
             self.get_logger().info("✅ NAV success.")
             return True
 
@@ -307,19 +477,26 @@ class DecisionMakingNode(Node):
             goal.object_id = obj
             goal.target_bin = ''
             fut = self.grasp_client.send_goal_async(goal)
-            rclpy.spin_until_future_complete(self, fut)
+            start = time.time()
+            while not fut.done():
+                if time.time() - start > 10.0:
+                    self.get_logger().error("⏰ NAV goal send timeout")
+                    return False
+                time.sleep(0.05)
+
             handle = fut.result()
             if not handle.accepted:
                 self.get_logger().warn("GRASP rejected.")
                 return False
 
             res_future = handle.get_result_async()
-            rclpy.spin_until_future_complete(self, res_future, timeout_sec=10.0)
-            
-            if not res_future.done():
-                self.get_logger().warn("⏰ GRASP timeout.")
-                self._send_cancel()
-                return False
+            start = time.time()
+            while not res_future.done():
+                if time.time() - start > 150.0:
+                    self.get_logger().warn("⏰ NAV timeout")
+                    self._send_cancel()
+                    return False
+                time.sleep(0.1)
 
             result = res_future.result().result
             if not result.success:
@@ -360,6 +537,11 @@ class DecisionMakingNode(Node):
 
     def destroy_node(self):
         self._shutdown.set()
+        try:
+            if hasattr(self, 'visualizer') and self.visualizer:
+                self.visualizer.stop()
+        except Exception:
+            pass
         super().destroy_node()
 
 def main():
@@ -374,3 +556,33 @@ def main():
     finally:
         node.destroy_node()
         rclpy.shutdown()
+
+
+# =============================================================
+# 📐 3D -> 2D Map Transform Helpers
+# =============================================================
+
+def load_map3d_to_map2d(yaml_path: str):
+    """Load 3D->2D transform parameters from YAML (plane_fit + sim2)."""
+    d = yaml.safe_load(open(yaml_path, "r"))
+
+    mu = np.array([d["plane_fit"]["mu"]["x"],
+                   d["plane_fit"]["mu"]["y"],
+                   d["plane_fit"]["mu"]["z"]], dtype=float)
+    e1 = np.array(d["plane_fit"]["basis_e1"], dtype=float)
+    e2 = np.array(d["plane_fit"]["basis_e2"], dtype=float)
+
+    s = float(d["sim2"]["s"])
+    R = np.array(d["sim2"]["R"], dtype=float)  # 2x2
+    t = np.array([d["sim2"]["t"]["x"], d["sim2"]["t"]["y"]], dtype=float)
+
+    return mu, e1, e2, s, R, t
+
+
+def map3d_point_to_map2d_xy(p_xyz, mu, e1, e2, s, R, t):
+    """Project 3D point onto 2D plane, then apply similarity transform."""
+    p = np.array(p_xyz, dtype=float)
+    d = p - mu
+    uv = np.array([d @ e1, d @ e2], dtype=float)
+    xy = s * (R @ uv) + t
+    return xy  # (x, y)

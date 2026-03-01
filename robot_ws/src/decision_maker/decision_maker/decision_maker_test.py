@@ -133,7 +133,7 @@ class DecisionMakingNode(Node):
         # ====== Core setup ======
         self.cmd_queue: "queue.Queue[dict]" = queue.Queue(maxsize=50)
         self._shutdown = threading.Event()
-        self.world = WorldModel()
+        self.world = WorldModel(node=self)
 
         # ====== 🛠️ MAP CALIBRATION CONFIG (3D->2D YAML) 🛠️ ======
         # Load 3D->2D transform parameters from YAML
@@ -179,6 +179,10 @@ class DecisionMakingNode(Node):
         except Exception:
             self.visualizer = None
         
+        # ====== Grasp approach threshold ======
+        self.declare_parameter('grasp_approach_dist', 0.5)   # set the arm to reach the object within 0.5 meters
+        self._grasp_threshold = self.get_parameter('grasp_approach_dist').get_parameter_value().double_value
+        self._nav_distance_remaining = float('inf')          # update by nav feedback to know how far we are from the target, used for grasp approach logic
 
         # ====== ROS entities ======
         self.sub_manual = self.create_subscription(String, '/manual_command', self.on_text_event, 10)
@@ -450,7 +454,21 @@ class DecisionMakingNode(Node):
                     self.get_logger().warn("⏰ NAV timeout")
                     self._send_cancel()
                     return False
+                
+                # navigation distance remaining to the goal position
+                if self._nav_distance_remaining < self._grasp_threshold:
+                    self.get_logger().info(f"Within grasp threshold ({self._nav_distance_remaining:.2f}m), proceeding to grasp.")
+                    gh.cancel_goal_async()
+                    threshold_triggered = True
+                    break
                 time.sleep(0.1)
+
+            if not threshold_triggered:             # check whether the robot is close enough to the object
+                nav_result = res_future.result().result
+                if not nav_result.success:
+                    self.get_logger().warn(f"❌ NAV failed: {nav_result.message}")
+                    return False
+            threshold_triggered = False
             self.get_logger().info("✅ NAV success.")
             return True
 
@@ -476,11 +494,12 @@ class DecisionMakingNode(Node):
             goal = GraspPlace.Goal()
             goal.object_id = obj
             goal.target_bin = ''
-            fut = self.grasp_client.send_goal_async(goal)
+
+            fut = self.grasp_client.send_goal_async(goal, feedback_callback=self._on_grasp_feedback)
             start = time.time()
             while not fut.done():
                 if time.time() - start > 10.0:
-                    self.get_logger().error("⏰ NAV goal send timeout")
+                    self.get_logger().error("⏰ GRASP goal send timeout")
                     return False
                 time.sleep(0.05)
 
@@ -492,8 +511,8 @@ class DecisionMakingNode(Node):
             res_future = handle.get_result_async()
             start = time.time()
             while not res_future.done():
-                if time.time() - start > 150.0:
-                    self.get_logger().warn("⏰ NAV timeout")
+                if time.time() - start > 300.0:
+                    self.get_logger().warn("⏰ GRASP timeout")
                     self._send_cancel()
                     return False
                 time.sleep(0.1)
@@ -510,13 +529,65 @@ class DecisionMakingNode(Node):
             return False
 
     def _execute_place(self, cmd: str) -> bool:
-        self.get_logger().info(f"🧺 PLACE simulated for {cmd}")
-        return True
+        # self.get_logger().info(f"🧺 PLACE simulated for {cmd}")
+        try:
+            dest = cmd.split(':', 1)[1].strip()
+
+            if not self.grasp_client.wait_for_server(timeout_sec=3.0):
+                self.get_logger().error("❌ GraspPlace server not available for PLACE.")
+                return False
+
+            goal = GraspPlace.Goal()
+            goal.object_id = ''
+            goal.target_bin = dest          # place object to dest
+
+            # send goal, receive feedback_callback
+            fut = self.grasp_client.send_goal_async(goal, feedback_callback=self._on_grasp_feedback)
+
+            start = time.time()
+            while not fut.done():
+                if time.time() - start > 10.0:
+                    self.get_logger().error("⏰ PLACE goal send timeout")
+                    return False
+                time.sleep(0.05)
+
+            handle = fut.result()
+            if not handle.accepted:
+                self.get_logger().warn("PLACE goal rejected.")
+                return False
+
+            res_future = handle.get_result_async()
+            start = time.time()
+            while not res_future.done():
+                if time.time() - start > 150.0:
+                    self.get_logger().warn("⏰ PLACE timeout")
+                    self._send_cancel()
+                    return False
+                time.sleep(0.1)
+
+            result = res_future.result().result
+            if not result.success:
+                self.get_logger().warn(f"❌ PLACE failed: {result.message}")
+                return False
+
+            self.get_logger().info(f"✅ PLACE success: {result.message}")
+            return True
+        except Exception as e:
+            self.get_logger().error(f"❌ PLACE error: {e}")
+            return False
+        # return True
 
     # =============================================================
     # FEEDBACK / CANCEL / UTILITIES
     # =============================================================
-    def _on_nav_feedback(self, fb): ...
+    def _on_nav_feedback(self, fb): 
+        dist = fb.feedback.distance_remaining
+        self._nav_distance_remaining = dist
+        self.get_logger().debug(f"NAV feedback: distance_remaining={dist:.2f} m")
+    
+    def _on_grasp_feedback(self, feedback_msg):
+        state = feedback_msg.feedback.state
+        self.get_logger().info(f"🤖 Grasp feedback: {state}")
     
     def _send_cancel(self):
         msg = String()

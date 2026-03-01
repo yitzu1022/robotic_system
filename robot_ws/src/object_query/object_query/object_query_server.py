@@ -18,10 +18,12 @@ class ObjectQueryServer(Node):
         super().__init__('object_query_server')
 
         # === Declare parameters ===
+        self.declare_parameter('3dmap_path', 'data/Util/Final_GS.npz')
         self.declare_parameter('map_path', 'data/Util/Final_SEM_GS_converted.npz')
         self.declare_parameter('semantic_path', 'data/Util/Final_SEM_GS_converted_meta.json')
         self.declare_parameter('auto_align', False) 
 
+        map_3d_path = self.get_parameter('3dmap_path').get_parameter_value().string_value
         map_path = self.get_parameter('map_path').get_parameter_value().string_value
         sem_path = self.get_parameter('semantic_path').get_parameter_value().string_value
         auto_align = self.get_parameter('auto_align').get_parameter_value().bool_value
@@ -37,9 +39,11 @@ class ObjectQueryServer(Node):
         
         self.map_points = None
         self.map_colors = None
+        self.map_3d_points = None
+        self.map_3d_colors = None
 
         # === Load Data ===
-        self.load_semantic_map(map_path, sem_path, auto_align)
+        self.load_semantic_map(map_path, sem_path, auto_align, map_3d_path)
 
         # === Publish at startup ===
         self.publish_object_list()
@@ -53,7 +57,7 @@ class ObjectQueryServer(Node):
         self.get_logger().info(f'✅ ObjectQuery service ready. Auto-align & Center: {auto_align}')
 
     # --------------------------------------------------------------
-    def load_semantic_map(self, map_path: str, sem_path: str, auto_align: bool):
+    def load_semantic_map(self, map_path: str, sem_path: str, auto_align: bool, map_3d_path: str):
         """Load semantic map with robust JSON parsing for 'segments_info'."""
         if not os.path.exists(map_path):
             self.get_logger().error(f'Map file not found: {map_path}')
@@ -61,11 +65,15 @@ class ObjectQueryServer(Node):
         if not os.path.exists(sem_path):
             self.get_logger().error(f'Semantic JSON not found: {sem_path}')
             return
+        if not os.path.exists(map_3d_path):
+            self.get_logger().error(f'3D map file not found: {map_3d_path}')
+            return
 
         try:
             # 1. Load NPZ Data
             data = np.load(map_path)
-            
+            data_3d = np.load(map_3d_path)
+            # semantic
             if 'pts' in data: points = data['pts']
             elif 'means3D' in data: points = data['means3D']
             else:
@@ -77,7 +85,17 @@ class ObjectQueryServer(Node):
             else:
                 self.get_logger().error(f"❌ Could not find 'pan' or 'semantic_ids' in {map_path}")
                 return
-
+            # 3D points and colors
+            points_3d = data_3d['points']
+            if 'colors' in data_3d:
+                colors_3d = data_3d['colors']
+                if colors_3d.max() <= 1.0:
+                    colors_3d = (colors_3d * 255).astype(np.uint8)
+                else:
+                    colors_3d = colors_3d.astype(np.uint8)
+            else:
+                # Default gray color if no colors available
+                colors_3d = np.full((points_3d.shape[0], 3), 128, dtype=np.uint8)
             # 2. Load JSON & Build Mapping
             with open(sem_path, 'r') as f:
                 sem_json = json.load(f)
@@ -101,11 +119,18 @@ class ObjectQueryServer(Node):
                 self.get_logger().error("❌ JSON loaded but no categories found.")
                 return
 
-            # 4. Auto-Align
+            # 4. Auto-Align (apply same transformation to both semantic and 3D maps)
             if auto_align:
-                points = self.align_map_to_gravity(points, semantic_ids, id_to_name)
+                rot_matrix = self.compute_alignment_matrix(points, semantic_ids, id_to_name)
+                if rot_matrix is not None:
+                    points = points @ rot_matrix.T
+                    points_3d = points_3d @ rot_matrix.T
+                    self.get_logger().info(f"✅ Applied alignment to both semantic and 3D maps")
             
+
             self.map_points = points
+            self.map_3d_points = points_3d
+            self.map_3d_colors = colors_3d
 
             # 5. Generate Colors
             if 'rgb' in data:
@@ -140,7 +165,8 @@ class ObjectQueryServer(Node):
             traceback.print_exc()
 
     # --------------------------------------------------------------
-    def align_map_to_gravity(self, points, semantic_ids, id_to_name):
+    def compute_alignment_matrix(self, points, semantic_ids, id_to_name):
+        """Compute rotation matrix to align floor to XY plane. Returns None if alignment fails."""
         floor_ids = []
         floor_keywords = ['floor', 'ground', 'carpet', 'tile', 'wood']
         
@@ -149,20 +175,22 @@ class ObjectQueryServer(Node):
                 floor_ids.append(sid)
         
         if not floor_ids:
-            return points
+            self.get_logger().warn("⚠️ No floor objects found for alignment")
+            return None
 
         mask = np.isin(semantic_ids, floor_ids)
         floor_pts = points[mask]
         
         if len(floor_pts) < 50:
-            return points
+            self.get_logger().warn("⚠️ Not enough floor points for reliable alignment")
+            return None
 
         self.get_logger().info(f"📐 Aligning map using {len(floor_pts)} floor points...")
 
         floor_mean = np.mean(floor_pts, axis=0)
         centered_floor = floor_pts - floor_mean
         u, s, vh = np.linalg.svd(centered_floor, full_matrices=False)
-        normal = vh[2, :] 
+        normal = -vh[2, :] 
 
         target_axis = np.array([0, 0, 1])
         rot_axis = np.cross(normal, target_axis)
@@ -174,10 +202,11 @@ class ObjectQueryServer(Node):
             angle = np.arccos(np.clip(rot_cos, -1.0, 1.0))
             r = R.from_rotvec(rot_axis * angle)
             rot_matrix = r.as_matrix()
-            points = points @ rot_matrix.T
-            self.get_logger().info(f"   ↪ Rotated by {np.degrees(angle):.2f} degrees.")
-
-        return points
+            self.get_logger().info(f"   ↪ Computed rotation by {np.degrees(angle):.2f} degrees.")
+            return rot_matrix
+        else:
+            self.get_logger().info("   ↪ Floor already aligned, no rotation needed.")
+            return np.eye(3)
 
     # --------------------------------------------------------------
     def handle_query(self, request, response):
@@ -270,9 +299,12 @@ class ObjectQueryServer(Node):
         self.marker_pub.publish(marker_array)
 
     def publish_point_cloud(self):
-        if self.map_points is None or self.map_colors is None: return
-        points = self.map_points
-        colors = self.map_colors
+        # Publish 3D map point cloud instead of semantic map
+        if self.map_3d_points is None or self.map_3d_colors is None:
+            self.get_logger().warn("⚠️ 3D map not loaded, cannot publish point cloud", throttle_duration_sec=5.0)
+            return
+        points = self.map_3d_points
+        colors = self.map_3d_colors
         msg = PointCloud2()
         msg.header.frame_id = "map"
         msg.header.stamp = self.get_clock().now().to_msg()
