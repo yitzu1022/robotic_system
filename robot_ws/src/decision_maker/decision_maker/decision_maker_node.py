@@ -416,7 +416,7 @@ class DecisionMakingNode(Node):
                 if not pos:
                     return False
                 x, y, _ = pos
-                th = 0.0
+                th = 0.0 
 
             # --- SEND TO NAV2 ---
             if not self.nav_client.wait_for_server(timeout_sec=10.0):

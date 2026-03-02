@@ -449,6 +449,7 @@ class DecisionMakingNode(Node):
 
             res_future = gh.get_result_async()
             start = time.time()
+            threshold_triggered = False
             while not res_future.done():
                 if time.time() - start > 150.0:
                     self.get_logger().warn("⏰ NAV timeout")
@@ -468,6 +469,7 @@ class DecisionMakingNode(Node):
                 if not nav_result.success:
                     self.get_logger().warn(f"❌ NAV failed: {nav_result.message}")
                     return False
+            # reset flag for next invocation
             threshold_triggered = False
             self.get_logger().info("✅ NAV success.")
             return True
