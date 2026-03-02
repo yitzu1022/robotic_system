@@ -29,7 +29,7 @@ class ObjectQueryServer(Node):
         auto_align = self.get_parameter('auto_align').get_parameter_value().bool_value
 
         # === ROS Entities ===
-        self.srv = self.create_service(ObjectQuery, 'object_query', self.handle_query)
+        self.srv = self.create_service(ObjectQuery, '/object_query', self.handle_query)
         self.pub_objects = self.create_publisher(String, '/object_list', 10)
         self.marker_pub = self.create_publisher(MarkerArray, '/semantic_map_markers', 10)
         self.pcl_pub = self.create_publisher(PointCloud2, '/map_pointcloud', 10)

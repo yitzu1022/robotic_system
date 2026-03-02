@@ -239,15 +239,24 @@ class DecisionMakingNode(Node):
 
             argument_str = text[len(matched_key):].strip()
 
-            if argument_str:
-                primitives = scenario_fn(self.world, argument_str)
-            else:
+            # Run scenario planning in a background thread so that any
+            # blocking service calls (ObjectQuery) do not block the
+            # rclpy executor thread and prevent service responses.
+            def _plan_and_enqueue():
                 try:
-                    primitives = scenario_fn(self.world)
-                except TypeError:
-                    raise ValueError(f"Command '{matched_key}' requires a target.")
+                    if argument_str:
+                        primitives = scenario_fn(self.world, argument_str)
+                    else:
+                        try:
+                            primitives = scenario_fn(self.world)
+                        except TypeError:
+                            raise ValueError(f"Command '{matched_key}' requires a target.")
+                    self.enqueue_command(text, primitives)
+                except Exception as e:
+                    self.get_logger().error(f"❌ Failed to plan command '{text}': {e}")
 
-            self.enqueue_command(text, primitives)
+            t = threading.Thread(target=_plan_and_enqueue, daemon=True)
+            t.start()
 
         except Exception as e:
             self.get_logger().error(f"❌ Failed to interpret command: {e}")
