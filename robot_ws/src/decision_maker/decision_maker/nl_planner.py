@@ -34,8 +34,8 @@ class WorldModel:
         start = time.time()
         timeout = 60.0                  # timeout from 10.0 to 60.0s
         while rclpy.ok() and not future.done():
-            # rclpy.spin_once(self.node, timeout_sec=0.1)
-            time.sleep(0.05)
+            rclpy.spin_once(self.node, timeout_sec=0.1)
+            # time.sleep(0.05)
             if time.time() - start > timeout:
                 self.node.get_logger().warn(f"⏰ Timeout: object query for '{name}' took > {timeout}s")
                 return None
