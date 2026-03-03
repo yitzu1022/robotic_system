@@ -3,7 +3,7 @@ scenario_library.py
 -------------------
 Library of high-level robot scenarios.
 """
-
+import re
 from typing import List
 from .nl_planner import WorldModel, fmt_goto
 
@@ -68,6 +68,35 @@ def fetch_drink(model: WorldModel) -> List[str]:
         fmt_goto(me_pose),
         "place:me",
     ]
+    
+def go_from(model: WorldModel, arg: str) -> List[str]:
+    s = arg.strip().lower()
+    # remove prefix "from"
+    s = re.sub(r'^\s*from\s+', '', s)
+    # split by common delimiters
+    if ' to ' in s:
+        a, b = [p.strip() for p in s.split(' to ', 1)]
+    elif '->' in s:
+        a, b = [p.strip() for p in s.split('->', 1)]
+    elif ' into ' in s:
+        a, b = [p.strip() for p in s.split(' into ', 1)]
+    else:
+        parts = s.split()
+        if len(parts) >= 2:
+            a, b = parts[0], parts[1]
+        else:
+            raise ValueError(f"Cannot parse 'go from' arguments: '{arg}'")
+    # remove (a/an/the)
+    a = re.sub(r'^(the|a|an)\s+', '', a)
+    b = re.sub(r'^(the|a|an)\s+', '', b)
+    return [f"goto:{a}", f"goto:{b}"]
+
+def test_arm(model: WorldModel) -> List[str]:
+    """Scenario to test grasp and place actions."""
+    return [
+        "grasp:sofa",
+        "place:table",
+    ]
 
 # =========================================================
 # SCENARIO REGISTRY
@@ -81,4 +110,6 @@ SCENARIO_REGISTRY = {
     "fetch drink": fetch_drink,
     # === NEW COMMAND ===
     "go to": go_to_target,
+    "go from": go_from,  # Example of a new scenario that could be added
+    "test arm": test_arm, # scenario to test grasp and place
 }

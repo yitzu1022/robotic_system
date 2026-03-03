@@ -1,0 +1,10 @@
+# Goal
+string object_id
+---
+# Result
+bool success
+string message
+---
+# Feedback
+string state
+float32 progress

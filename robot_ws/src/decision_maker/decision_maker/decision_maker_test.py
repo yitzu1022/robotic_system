@@ -15,7 +15,7 @@ from rclpy.action import ActionClient
 
 from std_msgs.msg import String
 from kachaka_interfaces.action import Navigate
-from decision_maker_interfaces.action import GraspPlace
+from decision_maker_interfaces.action import Grasp, Place
 from object_query_interfaces.srv import ObjectQuery
 
 # Assuming these exist in your package
@@ -191,7 +191,9 @@ class DecisionMakingNode(Node):
 
         # ====== Action clients ======
         self.nav_client = ActionClient(self, Navigate, '/Navigate_to_pose')         #change to similar name but not the same name with nav2's topic
-        self.grasp_client = ActionClient(self, GraspPlace, '/grasp_place')
+        # separate action clients for grasp and place
+        self.grasp_client = ActionClient(self, Grasp, '/grasp')
+        self.place_client = ActionClient(self, Place, '/place')
 
         # ====== Service client (object query) ======
         self.obj_client = self.create_client(ObjectQuery, '/object_query')
@@ -374,7 +376,7 @@ class DecisionMakingNode(Node):
                 self.visualizer.reset()
                 self.visualizer.draw_marker(nav_x, nav_y, label=object_name, color=(0, 255, 255), radius=12)
                 # show briefly (non-blocking)
-                self.visualizer.show(wait_ms=1)
+                # self.visualizer.show(wait_ms=1)
         except Exception as e:
             self.get_logger().warn(f"⚠️ Visualization error: {e}")
 
@@ -417,8 +419,11 @@ class DecisionMakingNode(Node):
                             # draw a simple orientation arrow (approx)
                             end_px, end_py = self.visualizer.world_to_pixel(x + 0.5 * math.cos(th), y + 0.5 * math.sin(th))
                             start_px, start_py = self.visualizer.world_to_pixel(x, y)
-                            cv2.arrowedLine(self.visualizer.display, (start_px, start_py), (end_px, end_py), (0, 0, 255), 3, tipLength=0.3)
-                        self.visualizer.show(wait_ms=1)
+                            with self.visualizer._lock:
+                                cv2.arrowedLine(
+                                    self.visualizer._buffer,
+                                    (start_px, start_py), (end_px, end_py),
+                                    (0, 0, 255), 3, tipLength=0.3)
                 except Exception:
                     pass
             
@@ -498,13 +503,12 @@ class DecisionMakingNode(Node):
                 self.get_logger().warn(f"⚠️ Skipping grasp — position unavailable for '{obj}'.")
                 return False
 
-            if not self.grasp_client.wait_for_server(timeout_sec=3.0):
-                self.get_logger().error("❌ GraspPlace server not available.")
+            if not self.grasp_client.wait_for_server(timeout_sec=5.0):
+                self.get_logger().error("❌ Grasp server not available.")
                 return False
 
-            goal = GraspPlace.Goal()
+            goal = Grasp.Goal()
             goal.object_id = obj
-            goal.target_bin = ''
 
             fut = self.grasp_client.send_goal_async(goal, feedback_callback=self._on_grasp_feedback)
             start = time.time()
@@ -543,17 +547,16 @@ class DecisionMakingNode(Node):
         # self.get_logger().info(f"🧺 PLACE simulated for {cmd}")
         try:
             dest = cmd.split(':', 1)[1].strip()
-
-            if not self.grasp_client.wait_for_server(timeout_sec=3.0):
-                self.get_logger().error("❌ GraspPlace server not available for PLACE.")
+            # Use the dedicated Place action server
+            if not self.place_client.wait_for_server(timeout_sec=3.0):
+                self.get_logger().error("❌ Place server not available for PLACE.")
                 return False
 
-            goal = GraspPlace.Goal()
-            goal.object_id = ''
-            goal.target_bin = dest          # place object to dest
+            goal = Place.Goal()
+            goal.target = dest          # place object to dest
 
             # send goal, receive feedback_callback
-            fut = self.grasp_client.send_goal_async(goal, feedback_callback=self._on_grasp_feedback)
+            fut = self.place_client.send_goal_async(goal, feedback_callback=self._on_place_feedback)
 
             start = time.time()
             while not fut.done():
@@ -599,6 +602,10 @@ class DecisionMakingNode(Node):
     def _on_grasp_feedback(self, feedback_msg):
         state = feedback_msg.feedback.state
         self.get_logger().info(f"🤖 Grasp feedback: {state}")
+
+    def _on_place_feedback(self, feedback_msg):
+        state = feedback_msg.feedback.state
+        self.get_logger().info(f"🤖 Place feedback: {state}")
     
     def _send_cancel(self):
         msg = String()
