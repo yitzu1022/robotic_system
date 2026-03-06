@@ -89,7 +89,9 @@ def go_from(model: WorldModel, arg: str) -> List[str]:
     # remove (a/an/the)
     a = re.sub(r'^(the|a|an)\s+', '', a)
     b = re.sub(r'^(the|a|an)\s+', '', b)
-    return [f"goto:{a}", f"goto:{b}"]
+    a_pose = model.resolve_object(a)
+    b_pose = model.resolve_place(b)
+    return [fmt_goto(a_pose), f"grasp:{a}", fmt_goto(b_pose), f"place:{b}"]
 
 def test_arm(model: WorldModel) -> List[str]:
     """Scenario to test grasp and place actions."""
@@ -110,6 +112,6 @@ SCENARIO_REGISTRY = {
     "fetch drink": fetch_drink,
     # === NEW COMMAND ===
     "go to": go_to_target,
-    "go from": go_from,  # Example of a new scenario that could be added
+    "bring": go_from,  # Example of a new scenario that could be added
     "test arm": test_arm, # scenario to test grasp and place
 }

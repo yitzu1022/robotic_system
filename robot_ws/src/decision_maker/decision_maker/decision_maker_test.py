@@ -294,7 +294,7 @@ class DecisionMakingNode(Node):
 
     def _execute_batch(self, name: str, actions: List[str], timeout_sec: float = 300.0) -> bool:
         start_time = time.time()
-        for act in actions:
+        for i, act in enumerate(actions):
             if time.time() - start_time > timeout_sec:
                 self.get_logger().warn(f"⏰ Timeout: '{name}' exceeded {timeout_sec}s, cancelling.")
                 self._send_cancel()
@@ -303,7 +303,9 @@ class DecisionMakingNode(Node):
             act = act.strip().lower()
             if act.startswith('goto:'):
                 self.get_logger().info(f"📍 Executing {act}")
-                if not self._execute_nav(act):
+                next_act = actions[i + 1].strip().lower() if i + 1 < len(actions) else ''
+                for_grasp = next_act.startswith('grasp:')
+                if not self._execute_nav(act, for_grasp=for_grasp):
                     return False
             elif act.startswith('grasp:'):
                 self.get_logger().info(f"✋ Executing {act}")
@@ -385,11 +387,17 @@ class DecisionMakingNode(Node):
     # =============================================================
     # NAV / GRASP / PLACE
     # =============================================================
-    def _execute_nav(self, cmd: str) -> bool:
+    def _execute_nav(self, cmd: str, for_grasp: bool = False) -> bool:
         """
-        Handles 'goto:x,y,th'. 
+        Handles 'goto:x,y,th'.
         CRITICAL CHANGE: Now applies calibration transform to these coordinates too.
+        for_grasp=True enables the early-exit shortcut when the robot is within
+        grasp_approach_dist of the target (so the arm can reach the object).
+        for_grasp=False (default) waits for the nav to fully succeed.
         """
+        # Reset stale distance so a previous nav's final reading cannot
+        # trigger the threshold check at the start of this nav.
+        self._nav_distance_remaining = float('inf')
         try:
             _, payload = cmd.split(':', 1)
             payload = payload.strip()
@@ -470,8 +478,9 @@ class DecisionMakingNode(Node):
                     self._send_cancel()
                     return False
                 
-                # navigation distance remaining to the goal position
-                if self._nav_distance_remaining < self._grasp_threshold:
+                # Early-exit shortcut: only when navigating toward an object
+                # that will be grasped next (not when heading to a place location).
+                if for_grasp and self._nav_distance_remaining < self._grasp_threshold:
                     self.get_logger().info(f"Within grasp threshold ({self._nav_distance_remaining:.2f}m), proceeding to grasp.")
                     gh.cancel_goal_async()
                     threshold_triggered = True

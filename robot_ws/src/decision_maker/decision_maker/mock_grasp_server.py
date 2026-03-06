@@ -54,7 +54,7 @@ class MockGraspPlaceServer(Node):
 
     # ---------------- Place callbacks ----------------
     def goal_place_cb(self, goal_request: Place.Goal):
-        self.get_logger().info(f'PLACE goal received: obj={goal_request.object_id} -> bin={goal_request.target_bin}')
+        self.get_logger().info(f'PLACE goal received: target={goal_request.target}')
         return GoalResponse.ACCEPT
 
     def cancel_place_cb(self, _goal_handle):
