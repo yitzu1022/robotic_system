@@ -2,79 +2,55 @@ import time
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
-from decision_maker_interfaces.action import Grasp, Place
+from decision_maker_interfaces.action import TaskCommand
 
 
 class MockGraspPlaceServer(Node):
     def __init__(self):
         super().__init__('mock_grasp_place_server')
-        # Grasp action server
-        self.grasp_server = ActionServer(
+        # Unified TaskCommand action server — handles both grasp and handover commands
+        self.task_server = ActionServer(
             self,
-            Grasp,
-            'grasp',
-            execute_callback=self.execute_grasp,
-            goal_callback=self.goal_grasp_cb,
-            cancel_callback=self.cancel_grasp_cb,
+            TaskCommand,
+            'task_command',
+            execute_callback=self.execute_task,
+            goal_callback=self.goal_cb,
+            cancel_callback=self.cancel_cb,
         )
-        # Place action server
-        self.place_server = ActionServer(
-            self,
-            Place,
-            'place',
-            execute_callback=self.execute_place,
-            goal_callback=self.goal_place_cb,
-            cancel_callback=self.cancel_place_cb,
-        )
-        self.get_logger().info('Mock Grasp/Place servers ready at /grasp and /place')
+        self.get_logger().info('Mock TaskCommand server ready at /task_command')
 
-    # ---------------- Grasp callbacks ----------------
-    def goal_grasp_cb(self, goal_request: Grasp.Goal):
-        self.get_logger().info(f'GRASP goal received: obj={goal_request.object_id}')
+    def goal_cb(self, goal_request: TaskCommand.Goal):
+        self.get_logger().info(f'TaskCommand goal received: "{goal_request.command}"')
         return GoalResponse.ACCEPT
 
-    def cancel_grasp_cb(self, _goal_handle):
-        self.get_logger().info('GRASP cancel requested')
+    def cancel_cb(self, _goal_handle):
+        self.get_logger().info('TaskCommand cancel requested')
         return CancelResponse.ACCEPT
 
-    async def execute_grasp(self, goal_handle):
-        fb = Grasp.Feedback()
-        phases = ['approach', 'align', 'close_gripper', 'lift', 'done']
-        for i, ph in enumerate(phases):
+    async def execute_task(self, goal_handle):
+        command = goal_handle.request.command.strip().lower()
+        fb = TaskCommand.Feedback()
+
+        if command.startswith('grasp'):
+            phases = ['approach', 'align', 'close_gripper', 'lift', 'done']
+        elif command.startswith('handover'):
+            phases = ['move_to_bin', 'lower', 'open_gripper', 'retract', 'done']
+        else:
+            self.get_logger().warn(f'Unknown command: "{command}"')
+            goal_handle.succeed()
+            return TaskCommand.Result(success=False, message=f'unknown command: {command}')
+
+        for ph in phases:
             if goal_handle.is_cancel_requested:
                 goal_handle.canceled()
-                self.get_logger().info('GRASP goal canceled')
-                return Grasp.Result(success=False, message='canceled')
-            fb.state = ph
-            fb.progress = float(i + 1) / len(phases)
+                self.get_logger().info('TaskCommand goal canceled')
+                return TaskCommand.Result(success=False, message='canceled')
+            fb.feedback = ph
             goal_handle.publish_feedback(fb)
             time.sleep(0.5)
+
         goal_handle.succeed()
-        return Grasp.Result(success=True, message='ok')
-
-    # ---------------- Place callbacks ----------------
-    def goal_place_cb(self, goal_request: Place.Goal):
-        self.get_logger().info(f'PLACE goal received: target={goal_request.target}')
-        return GoalResponse.ACCEPT
-
-    def cancel_place_cb(self, _goal_handle):
-        self.get_logger().info('PLACE cancel requested')
-        return CancelResponse.ACCEPT
-
-    async def execute_place(self, goal_handle):
-        fb = Place.Feedback()
-        phases = ['move_to_bin', 'lower', 'open_gripper', 'retract', 'done']
-        for i, ph in enumerate(phases):
-            if goal_handle.is_cancel_requested:
-                goal_handle.canceled()
-                self.get_logger().info('PLACE goal canceled')
-                return Place.Result(success=False, message='canceled')
-            fb.state = ph
-            fb.progress = float(i + 1) / len(phases)
-            goal_handle.publish_feedback(fb)
-            time.sleep(0.5)
-        goal_handle.succeed()
-        return Place.Result(success=True, message='ok')
+        return TaskCommand.Result(success=True, message='ok')
 
 
 def main():

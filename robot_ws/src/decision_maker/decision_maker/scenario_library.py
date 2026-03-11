@@ -69,29 +69,50 @@ def fetch_drink(model: WorldModel) -> List[str]:
         "place:me",
     ]
     
+_PREPOSITIONS = r'(?:on|in|at|near|by|inside|from|above|below|under|beside|next\s+to)'
+
 def go_from(model: WorldModel, arg: str) -> List[str]:
+    """
+    Parse "bring <object> [on/in/at/near... <location>] to <destination>".
+
+    Examples:
+      "bring the bottle on cabinet to table"
+        => goto:cabinet, grasp:bottle, goto:table, place:table
+      "bring bottle to table"
+        => goto:bottle,  grasp:bottle, goto:table, place:table
+    """
     s = arg.strip().lower()
-    # remove prefix "from"
+    # remove leading "from"
     s = re.sub(r'^\s*from\s+', '', s)
-    # split by common delimiters
+
+    # Split source phrase from destination on "to", "into"
     if ' to ' in s:
-        a, b = [p.strip() for p in s.split(' to ', 1)]
-    elif '->' in s:
-        a, b = [p.strip() for p in s.split('->', 1)]
+        src, dest = [p.strip() for p in s.split(' to ', 1)]
     elif ' into ' in s:
-        a, b = [p.strip() for p in s.split(' into ', 1)]
+        src, dest = [p.strip() for p in s.split(' into ', 1)]
     else:
         parts = s.split()
         if len(parts) >= 2:
-            a, b = parts[0], parts[1]
+            src, dest = parts[0], parts[1]
         else:
-            raise ValueError(f"Cannot parse 'go from' arguments: '{arg}'")
-    # remove (a/an/the)
-    a = re.sub(r'^(the|a|an)\s+', '', a)
-    b = re.sub(r'^(the|a|an)\s+', '', b)
-    a_pose = model.resolve_object(a)
-    b_pose = model.resolve_place(b)
-    return [fmt_goto(a_pose), f"grasp:{a}", fmt_goto(b_pose), f"place:{b}"]
+            raise ValueError(f"Cannot parse 'bring' arguments: '{arg}'")
+
+    # Strip articles from both sides
+    src = re.sub(r'^(the|a|an)\s+', '', src)
+    dest = re.sub(r'^(the|a|an)\s+', '', dest)
+    # Strip any trailing preposition phrase from destination (e.g. "table on left")
+    dest = re.split(r'\s+' + _PREPOSITIONS + r'\s+', dest)[0].strip()
+
+    # Parse source: "<object> <preposition> <location>"  vs just "<object>"
+    prep_match = re.search(r'\s+' + _PREPOSITIONS + r'\s+', src)
+    if prep_match:
+        obj = src[:prep_match.start()].strip()
+        nav_target = src[prep_match.end():].strip()   # navigate to the location, not the object
+    else:
+        obj = src.strip()
+        nav_target = obj                              # navigate to the object itself
+
+    return [f"goto:{nav_target}", f"grasp:{obj}", f"goto:{dest}", f"place:{dest}"]
 
 def test_arm(model: WorldModel) -> List[str]:
     """Scenario to test grasp and place actions."""

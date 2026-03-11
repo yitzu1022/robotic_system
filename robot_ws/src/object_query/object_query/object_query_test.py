@@ -18,9 +18,12 @@ class ObjectQueryServer(Node):
         super().__init__('object_query_server')
 
         # === Declare parameters ===
-        self.declare_parameter('3dmap_path', 'data/Util/Final_GS.npz')
-        self.declare_parameter('map_path', 'data/Util/Final_SEM_GS_converted.npz')
-        self.declare_parameter('semantic_path', 'data/Util/Final_SEM_GS_converted_meta.json')
+        # self.declare_parameter('3dmap_path', 'data/Util/Final_GS.npz') old scene map
+        self.declare_parameter('3dmap_path', 'data/lab/accumulated_gaussians.npz')
+        # self.declare_parameter('map_path', 'data/Util/Final_SEM_GS_converted.npz') old semantic map
+        self.declare_parameter('map_path', 'data/lab/semantic_pcd_accumulated_gaussians.npz')
+        # self.declare_parameter('semantic_path', 'data/Util/Final_SEM_GS_converted_meta.json') old semantic labels
+        self.declare_parameter('semantic_path', 'data/lab/semantic_pcd_accumulated_gaussians_meta.json')
         self.declare_parameter('auto_align', False) 
 
         map_3d_path = self.get_parameter('3dmap_path').get_parameter_value().string_value

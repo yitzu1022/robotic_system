@@ -15,7 +15,7 @@ from rclpy.action import ActionClient
 
 from std_msgs.msg import String
 from kachaka_interfaces.action import Navigate
-from decision_maker_interfaces.action import Grasp, Place
+from decision_maker_interfaces.action import TaskCommand
 from object_query_interfaces.srv import ObjectQuery
 
 # Assuming these exist in your package
@@ -191,9 +191,7 @@ class DecisionMakingNode(Node):
 
         # ====== Action clients ======
         self.nav_client = ActionClient(self, Navigate, '/Navigate_to_pose')         #change to similar name but not the same name with nav2's topic
-        # separate action clients for grasp and place
-        self.grasp_client = ActionClient(self, Grasp, '/grasp')
-        self.place_client = ActionClient(self, Place, '/place')
+        self.task_client = ActionClient(self, TaskCommand, '/task_command')
 
         # ====== Service client (object query) ======
         self.obj_client = self.create_client(ObjectQuery, '/object_query')
@@ -501,104 +499,62 @@ class DecisionMakingNode(Node):
             self.get_logger().error(f"❌ NAV error: {e}")
             return False
 
-    def _execute_grasp(self, cmd: str) -> bool:
+    def _send_task_command(self, command: str, label: str, timeout_sec: float = 300.0) -> bool:
+        """Send a TaskCommand goal and wait for the result. Used by both grasp and place."""
         try:
-            obj = cmd.split(':', 1)[1].strip()
-            
-            # Check position before grasping (optional but good for debugging)
-            pos = self._query_object_position(obj)
-            
-            if not pos:
-                self.get_logger().warn(f"⚠️ Skipping grasp — position unavailable for '{obj}'.")
+            if not self.task_client.wait_for_server(timeout_sec=5.0):
+                self.get_logger().error(f"❌ TaskCommand server not available for {label}.")
                 return False
 
-            if not self.grasp_client.wait_for_server(timeout_sec=5.0):
-                self.get_logger().error("❌ Grasp server not available.")
-                return False
+            goal = TaskCommand.Goal()
+            goal.command = command
 
-            goal = Grasp.Goal()
-            goal.object_id = obj
-
-            fut = self.grasp_client.send_goal_async(goal, feedback_callback=self._on_grasp_feedback)
+            fut = self.task_client.send_goal_async(goal, feedback_callback=self._on_task_feedback)
             start = time.time()
             while not fut.done():
                 if time.time() - start > 10.0:
-                    self.get_logger().error("⏰ GRASP goal send timeout")
+                    self.get_logger().error(f"⏰ {label} goal send timeout")
                     return False
                 time.sleep(0.05)
 
             handle = fut.result()
             if not handle.accepted:
-                self.get_logger().warn("GRASP rejected.")
+                self.get_logger().warn(f"{label} goal rejected.")
                 return False
 
             res_future = handle.get_result_async()
             start = time.time()
             while not res_future.done():
-                if time.time() - start > 300.0:
-                    self.get_logger().warn("⏰ GRASP timeout")
+                if time.time() - start > timeout_sec:
+                    self.get_logger().warn(f"⏰ {label} timeout")
                     self._send_cancel()
                     return False
                 time.sleep(0.1)
 
             result = res_future.result().result
             if not result.success:
-                self.get_logger().warn(f"❌ GRASP failed: {result.message}")
+                self.get_logger().warn(f"❌ {label} failed: {result.message}")
                 return False
 
-            self.get_logger().info(f"✅ GRASP success: {result.message}")
+            self.get_logger().info(f"✅ {label} success: {result.message}")
             return True
         except Exception as e:
-            self.get_logger().error(f"❌ GRASP error: {e}")
+            self.get_logger().error(f"❌ {label} error: {e}")
             return False
+
+    def _execute_grasp(self, cmd: str) -> bool:
+        obj = cmd.split(':', 1)[1].strip()
+
+        pos = self._query_object_position(obj)
+        if not pos:
+            self.get_logger().warn(f"⚠️ Skipping grasp — position unavailable for '{obj}'.")
+            return False
+
+        return self._send_task_command(f'grasp the {obj}', 'GRASP', timeout_sec=300.0)
 
     def _execute_place(self, cmd: str) -> bool:
-        # self.get_logger().info(f"🧺 PLACE simulated for {cmd}")
-        try:
-            dest = cmd.split(':', 1)[1].strip()
-            # Use the dedicated Place action server
-            if not self.place_client.wait_for_server(timeout_sec=3.0):
-                self.get_logger().error("❌ Place server not available for PLACE.")
-                return False
-
-            goal = Place.Goal()
-            goal.target = dest          # place object to dest
-
-            # send goal, receive feedback_callback
-            fut = self.place_client.send_goal_async(goal, feedback_callback=self._on_place_feedback)
-
-            start = time.time()
-            while not fut.done():
-                if time.time() - start > 10.0:
-                    self.get_logger().error("⏰ PLACE goal send timeout")
-                    return False
-                time.sleep(0.05)
-
-            handle = fut.result()
-            if not handle.accepted:
-                self.get_logger().warn("PLACE goal rejected.")
-                return False
-
-            res_future = handle.get_result_async()
-            start = time.time()
-            while not res_future.done():
-                if time.time() - start > 150.0:
-                    self.get_logger().warn("⏰ PLACE timeout")
-                    self._send_cancel()
-                    return False
-                time.sleep(0.1)
-
-            result = res_future.result().result
-            if not result.success:
-                self.get_logger().warn(f"❌ PLACE failed: {result.message}")
-                return False
-
-            self.get_logger().info(f"✅ PLACE success: {result.message}")
-            return True
-        except Exception as e:
-            self.get_logger().error(f"❌ PLACE error: {e}")
-            return False
-        # return True
+        dest = cmd.split(':', 1)[1].strip()
+        return self._send_task_command(f'handover the {dest}', 'PLACE', timeout_sec=150.0)
 
     # =============================================================
     # FEEDBACK / CANCEL / UTILITIES
@@ -608,13 +564,9 @@ class DecisionMakingNode(Node):
         self._nav_distance_remaining = dist
         self.get_logger().debug(f"NAV feedback: distance_remaining={dist:.2f} m")
     
-    def _on_grasp_feedback(self, feedback_msg):
-        state = feedback_msg.feedback.state
-        self.get_logger().info(f"🤖 Grasp feedback: {state}")
-
-    def _on_place_feedback(self, feedback_msg):
-        state = feedback_msg.feedback.state
-        self.get_logger().info(f"🤖 Place feedback: {state}")
+    def _on_task_feedback(self, feedback_msg):
+        state = feedback_msg.feedback.feedback
+        self.get_logger().info(f"🤖 Task feedback: {state}")
     
     def _send_cancel(self):
         msg = String()
