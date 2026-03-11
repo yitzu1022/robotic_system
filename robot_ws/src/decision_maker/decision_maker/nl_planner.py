@@ -65,7 +65,7 @@ class WorldModel:
         static_places = {
             "me": (0.0, 0.0, 0.0),
             "home": (1.5, 0.0, 0.0),
-            "table": (1.0, 1.0, 0.0),
+            # "table": (1.0, 1.0, 0.0),
             "kitchen": (3.0, -1.0, 0.0),
         }
         
