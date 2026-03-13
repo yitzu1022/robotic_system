@@ -1,0 +1,10 @@
+numpy
+opencv-python
+torch
+torchvision
+open3d
+ultralytics
+matplotlib
+pandas
+scikit-learn
+transforms3d

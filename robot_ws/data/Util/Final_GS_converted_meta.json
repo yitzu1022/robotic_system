@@ -1,0 +1,112 @@
+{
+  "segments_info": [
+    {
+      "id": 0,
+      "category_name": "wall",
+      "class": "wall",
+      "point_count": 399446
+    },
+    {
+      "id": 1,
+      "category_name": "floor",
+      "class": "floor",
+      "point_count": 3
+    },
+    {
+      "id": 5,
+      "category_name": "cabinet",
+      "class": "cabinet",
+      "point_count": 1982
+    },
+    {
+      "id": 6,
+      "category_name": "shelf",
+      "class": "shelf",
+      "point_count": 1574
+    },
+    {
+      "id": 7,
+      "category_name": "table",
+      "class": "table",
+      "point_count": 97
+    },
+    {
+      "id": 9,
+      "category_name": "sofa",
+      "class": "sofa",
+      "point_count": 1551
+    },
+    {
+      "id": 10,
+      "category_name": "desk",
+      "class": "desk",
+      "point_count": 132539
+    },
+    {
+      "id": 11,
+      "category_name": "counter",
+      "class": "counter",
+      "point_count": 1377808
+    },
+    {
+      "id": 12,
+      "category_name": "curtain",
+      "class": "curtain",
+      "point_count": 49695
+    },
+    {
+      "id": 13,
+      "category_name": "picture",
+      "class": "picture",
+      "point_count": 119
+    },
+    {
+      "id": 15,
+      "category_name": "tv",
+      "class": "tv",
+      "point_count": 6
+    },
+    {
+      "id": 16,
+      "category_name": "refrigerator",
+      "class": "refrigerator",
+      "point_count": 220
+    },
+    {
+      "id": 17,
+      "category_name": "box",
+      "class": "box",
+      "point_count": 15763
+    },
+    {
+      "id": 18,
+      "category_name": "monitor",
+      "class": "monitor",
+      "point_count": 4120
+    },
+    {
+      "id": 19,
+      "category_name": "microwave",
+      "class": "microwave",
+      "point_count": 1308
+    },
+    {
+      "id": 20,
+      "category_name": "pillow",
+      "class": "pillow",
+      "point_count": 26
+    },
+    {
+      "id": 21,
+      "category_name": "Fan",
+      "class": "Fan",
+      "point_count": 11339
+    },
+    {
+      "id": 22,
+      "category_name": "other",
+      "class": "other",
+      "point_count": 861642
+    }
+  ]
+}
