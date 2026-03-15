@@ -26,6 +26,7 @@
 - [7. Runtime Interaction Between Packages](#section-7-runtime-interaction-between-packages)
 - [8. Practical Setup and Execution Guide](#section-8-practical-setup-and-execution-guide)
 
+![Diagram](https://github.com/jimmy94828/robotic_system/blob/main/architecture.png)
 <a id="section-1-executive-summary"></a>
 
 ## 1. Executive Summary
