@@ -15,7 +15,7 @@ from rclpy.action import ActionClient
 
 from std_msgs.msg import String
 from kachaka_interfaces.action import Navigate
-from decision_maker_interfaces.action import GraspPlace
+from decision_maker_interfaces.action import TaskCommand
 from object_query_interfaces.srv import ObjectQuery
 
 # Assuming these exist in your package
@@ -133,7 +133,7 @@ class DecisionMakingNode(Node):
         # ====== Core setup ======
         self.cmd_queue: "queue.Queue[dict]" = queue.Queue(maxsize=50)
         self._shutdown = threading.Event()
-        self.world = WorldModel()
+        self.world = WorldModel(node=self)
 
         # ====== 🛠️ MAP CALIBRATION CONFIG (3D->2D YAML) 🛠️ ======
         # Load 3D->2D transform parameters from YAML
@@ -179,6 +179,10 @@ class DecisionMakingNode(Node):
         except Exception:
             self.visualizer = None
         
+        # ====== Grasp approach threshold ======
+        self.declare_parameter('grasp_approach_dist', 0.5)   # set the arm to reach the object within 0.5 meters
+        self._grasp_threshold = self.get_parameter('grasp_approach_dist').get_parameter_value().double_value
+        self._nav_distance_remaining = float('inf')          # update by nav feedback to know how far we are from the target, used for grasp approach logic
 
         # ====== ROS entities ======
         self.sub_manual = self.create_subscription(String, '/manual_command', self.on_text_event, 10)
@@ -187,7 +191,7 @@ class DecisionMakingNode(Node):
 
         # ====== Action clients ======
         self.nav_client = ActionClient(self, Navigate, '/Navigate_to_pose')         #change to similar name but not the same name with nav2's topic
-        self.grasp_client = ActionClient(self, GraspPlace, '/grasp_place')
+        self.task_client = ActionClient(self, TaskCommand, '/task_command')
 
         # ====== Service client (object query) ======
         self.obj_client = self.create_client(ObjectQuery, '/object_query')
@@ -235,15 +239,24 @@ class DecisionMakingNode(Node):
 
             argument_str = text[len(matched_key):].strip()
 
-            if argument_str:
-                primitives = scenario_fn(self.world, argument_str)
-            else:
+            # Run scenario planning in a background thread so that any
+            # blocking service calls (ObjectQuery) do not block the
+            # rclpy executor thread and prevent service responses.
+            def _plan_and_enqueue():
                 try:
-                    primitives = scenario_fn(self.world)
-                except TypeError:
-                    raise ValueError(f"Command '{matched_key}' requires a target.")
+                    if argument_str:
+                        primitives = scenario_fn(self.world, argument_str)
+                    else:
+                        try:
+                            primitives = scenario_fn(self.world)
+                        except TypeError:
+                            raise ValueError(f"Command '{matched_key}' requires a target.")
+                    self.enqueue_command(text, primitives)
+                except Exception as e:
+                    self.get_logger().error(f"❌ Failed to plan command '{text}': {e}")
 
-            self.enqueue_command(text, primitives)
+            t = threading.Thread(target=_plan_and_enqueue, daemon=True)
+            t.start()
 
         except Exception as e:
             self.get_logger().error(f"❌ Failed to interpret command: {e}")
@@ -279,7 +292,7 @@ class DecisionMakingNode(Node):
 
     def _execute_batch(self, name: str, actions: List[str], timeout_sec: float = 300.0) -> bool:
         start_time = time.time()
-        for act in actions:
+        for i, act in enumerate(actions):
             if time.time() - start_time > timeout_sec:
                 self.get_logger().warn(f"⏰ Timeout: '{name}' exceeded {timeout_sec}s, cancelling.")
                 self._send_cancel()
@@ -288,7 +301,9 @@ class DecisionMakingNode(Node):
             act = act.strip().lower()
             if act.startswith('goto:'):
                 self.get_logger().info(f"📍 Executing {act}")
-                if not self._execute_nav(act):
+                next_act = actions[i + 1].strip().lower() if i + 1 < len(actions) else ''
+                for_grasp = next_act.startswith('grasp:')
+                if not self._execute_nav(act, for_grasp=for_grasp):
                     return False
             elif act.startswith('grasp:'):
                 self.get_logger().info(f"✋ Executing {act}")
@@ -361,7 +376,7 @@ class DecisionMakingNode(Node):
                 self.visualizer.reset()
                 self.visualizer.draw_marker(nav_x, nav_y, label=object_name, color=(0, 255, 255), radius=12)
                 # show briefly (non-blocking)
-                self.visualizer.show(wait_ms=1)
+                # self.visualizer.show(wait_ms=1)
         except Exception as e:
             self.get_logger().warn(f"⚠️ Visualization error: {e}")
 
@@ -370,11 +385,17 @@ class DecisionMakingNode(Node):
     # =============================================================
     # NAV / GRASP / PLACE
     # =============================================================
-    def _execute_nav(self, cmd: str) -> bool:
+    def _execute_nav(self, cmd: str, for_grasp: bool = False) -> bool:
         """
-        Handles 'goto:x,y,th'. 
+        Handles 'goto:x,y,th'.
         CRITICAL CHANGE: Now applies calibration transform to these coordinates too.
+        for_grasp=True enables the early-exit shortcut when the robot is within
+        grasp_approach_dist of the target (so the arm can reach the object).
+        for_grasp=False (default) waits for the nav to fully succeed.
         """
+        # Reset stale distance so a previous nav's final reading cannot
+        # trigger the threshold check at the start of this nav.
+        self._nav_distance_remaining = float('inf')
         try:
             _, payload = cmd.split(':', 1)
             payload = payload.strip()
@@ -404,8 +425,11 @@ class DecisionMakingNode(Node):
                             # draw a simple orientation arrow (approx)
                             end_px, end_py = self.visualizer.world_to_pixel(x + 0.5 * math.cos(th), y + 0.5 * math.sin(th))
                             start_px, start_py = self.visualizer.world_to_pixel(x, y)
-                            cv2.arrowedLine(self.visualizer.display, (start_px, start_py), (end_px, end_py), (0, 0, 255), 3, tipLength=0.3)
-                        self.visualizer.show(wait_ms=1)
+                            with self.visualizer._lock:
+                                cv2.arrowedLine(
+                                    self.visualizer._buffer,
+                                    (start_px, start_py), (end_px, end_py),
+                                    (0, 0, 255), 3, tipLength=0.3)
                 except Exception:
                     pass
             
@@ -445,12 +469,29 @@ class DecisionMakingNode(Node):
 
             res_future = gh.get_result_async()
             start = time.time()
+            threshold_triggered = False
             while not res_future.done():
                 if time.time() - start > 150.0:
                     self.get_logger().warn("⏰ NAV timeout")
                     self._send_cancel()
                     return False
+                
+                # Early-exit shortcut: only when navigating toward an object
+                # that will be grasped next (not when heading to a place location).
+                if for_grasp and self._nav_distance_remaining < self._grasp_threshold:
+                    self.get_logger().info(f"Within grasp threshold ({self._nav_distance_remaining:.2f}m), proceeding to grasp.")
+                    gh.cancel_goal_async()
+                    threshold_triggered = True
+                    break
                 time.sleep(0.1)
+
+            if not threshold_triggered:             # check whether the robot is close enough to the object
+                nav_result = res_future.result().result
+                if not nav_result.success:
+                    self.get_logger().warn(f"❌ NAV failed: {nav_result.message}")
+                    return False
+            # reset flag for next invocation
+            threshold_triggered = False
             self.get_logger().info("✅ NAV success.")
             return True
 
@@ -458,65 +499,74 @@ class DecisionMakingNode(Node):
             self.get_logger().error(f"❌ NAV error: {e}")
             return False
 
-    def _execute_grasp(self, cmd: str) -> bool:
+    def _send_task_command(self, command: str, label: str, timeout_sec: float = 300.0) -> bool:
+        """Send a TaskCommand goal and wait for the result. Used by both grasp and place."""
         try:
-            obj = cmd.split(':', 1)[1].strip()
-            
-            # Check position before grasping (optional but good for debugging)
-            pos = self._query_object_position(obj)
-            
-            if not pos:
-                self.get_logger().warn(f"⚠️ Skipping grasp — position unavailable for '{obj}'.")
+            if not self.task_client.wait_for_server(timeout_sec=5.0):
+                self.get_logger().error(f"❌ TaskCommand server not available for {label}.")
                 return False
 
-            if not self.grasp_client.wait_for_server(timeout_sec=3.0):
-                self.get_logger().error("❌ GraspPlace server not available.")
-                return False
+            goal = TaskCommand.Goal()
+            goal.command = command
 
-            goal = GraspPlace.Goal()
-            goal.object_id = obj
-            goal.target_bin = ''
-            fut = self.grasp_client.send_goal_async(goal)
+            fut = self.task_client.send_goal_async(goal, feedback_callback=self._on_task_feedback)
             start = time.time()
             while not fut.done():
                 if time.time() - start > 10.0:
-                    self.get_logger().error("⏰ NAV goal send timeout")
+                    self.get_logger().error(f"⏰ {label} goal send timeout")
                     return False
                 time.sleep(0.05)
 
             handle = fut.result()
             if not handle.accepted:
-                self.get_logger().warn("GRASP rejected.")
+                self.get_logger().warn(f"{label} goal rejected.")
                 return False
 
             res_future = handle.get_result_async()
             start = time.time()
             while not res_future.done():
-                if time.time() - start > 150.0:
-                    self.get_logger().warn("⏰ NAV timeout")
+                if time.time() - start > timeout_sec:
+                    self.get_logger().warn(f"⏰ {label} timeout")
                     self._send_cancel()
                     return False
                 time.sleep(0.1)
 
             result = res_future.result().result
             if not result.success:
-                self.get_logger().warn(f"❌ GRASP failed: {result.message}")
+                self.get_logger().warn(f"❌ {label} failed: {result.message}")
                 return False
 
-            self.get_logger().info(f"✅ GRASP success: {result.message}")
+            self.get_logger().info(f"✅ {label} success: {result.message}")
             return True
         except Exception as e:
-            self.get_logger().error(f"❌ GRASP error: {e}")
+            self.get_logger().error(f"❌ {label} error: {e}")
             return False
 
+    def _execute_grasp(self, cmd: str) -> bool:
+        obj = cmd.split(':', 1)[1].strip()
+
+        pos = self._query_object_position(obj)
+        if not pos:
+            self.get_logger().warn(f"⚠️ Skipping grasp — position unavailable for '{obj}'.")
+            return False
+
+        return self._send_task_command(f'grasp the {obj}', 'GRASP', timeout_sec=300.0)
+
     def _execute_place(self, cmd: str) -> bool:
-        self.get_logger().info(f"🧺 PLACE simulated for {cmd}")
-        return True
+        dest = cmd.split(':', 1)[1].strip()
+        return self._send_task_command(f'place to {dest}', 'PLACE', timeout_sec=150.0)
 
     # =============================================================
     # FEEDBACK / CANCEL / UTILITIES
     # =============================================================
-    def _on_nav_feedback(self, fb): ...
+    def _on_nav_feedback(self, fb): 
+        dist = fb.feedback.distance_remaining
+        self._nav_distance_remaining = dist
+        self.get_logger().debug(f"NAV feedback: distance_remaining={dist:.2f} m")
+    
+    def _on_task_feedback(self, feedback_msg):
+        state = feedback_msg.feedback.feedback
+        self.get_logger().info(f"🤖 Task feedback: {state}")
     
     def _send_cancel(self):
         msg = String()

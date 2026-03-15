@@ -18,18 +18,23 @@ class ObjectQueryServer(Node):
         super().__init__('object_query_server')
 
         # === Declare parameters ===
-        self.declare_parameter('3dmap_path', 'data/Util/Final_GS.npz')
-        self.declare_parameter('map_path', 'data/Util/Final_SEM_GS_converted.npz')
-        self.declare_parameter('semantic_path', 'data/Util/Final_SEM_GS_converted_meta.json')
+        # self.declare_parameter('3dmap_path', 'data/Util/Final_GS.npz') old scene map
+        self.declare_parameter('3dmap_path', 'data/lab/accumulated_gaussians.npz')
+        # self.declare_parameter('map_path', 'data/Util/Final_SEM_GS_converted.npz') old semantic map
+        self.declare_parameter('map_path', 'data/lab/semantic_pcd_accumulated_gaussians.npz')
+        # self.declare_parameter('semantic_path', 'data/Util/Final_SEM_GS_converted_meta.json') old semantic labels
+        self.declare_parameter('semantic_path', 'data/lab/semantic_pcd_accumulated_gaussians_meta.json')
+        self.declare_parameter('instance_path', 'data/lab/accumulated_gaussians_instance_semantic_info.json')
         self.declare_parameter('auto_align', False) 
 
         map_3d_path = self.get_parameter('3dmap_path').get_parameter_value().string_value
         map_path = self.get_parameter('map_path').get_parameter_value().string_value
         sem_path = self.get_parameter('semantic_path').get_parameter_value().string_value
+        instance_path = self.get_parameter('instance_path').get_parameter_value().string_value
         auto_align = self.get_parameter('auto_align').get_parameter_value().bool_value
 
         # === ROS Entities ===
-        self.srv = self.create_service(ObjectQuery, 'object_query', self.handle_query)
+        self.srv = self.create_service(ObjectQuery, '/object_query', self.handle_query)
         self.pub_objects = self.create_publisher(String, '/object_list', 10)
         self.marker_pub = self.create_publisher(MarkerArray, '/semantic_map_markers', 10)
         self.pcl_pub = self.create_publisher(PointCloud2, '/map_pointcloud', 10)
@@ -43,7 +48,11 @@ class ObjectQueryServer(Node):
         self.map_3d_colors = None
 
         # === Load Data ===
-        self.load_semantic_map(map_path, sem_path, auto_align, map_3d_path)
+        if os.path.exists(instance_path):
+            self.load_instance_map(instance_path, map_3d_path)
+        else:
+            self.get_logger().warn(f'⚠️ instance_path not found ({instance_path}), falling back to semantic map.')
+            self.load_semantic_map(map_path, sem_path, auto_align, map_3d_path)
 
         # === Publish at startup ===
         self.publish_object_list()
@@ -55,6 +64,46 @@ class ObjectQueryServer(Node):
         self.pcl_timer = self.create_timer(1.0, self.publish_point_cloud)  # Publish every 1 second
 
         self.get_logger().info(f'✅ ObjectQuery service ready. Auto-align & Center: {auto_align}')
+
+    # --------------------------------------------------------------
+    def load_instance_map(self, instance_path: str, map_3d_path: str):
+        """Load object positions from instance JSON (centroid per instance). Also loads 3D point cloud."""
+        try:
+            with open(instance_path, 'r') as f:
+                inst_data = json.load(f)
+
+            instances = inst_data.get('instances', {})
+            if not instances:
+                self.get_logger().error(f'❌ No "instances" key found in {instance_path}')
+                return
+
+            self.object_db.clear()
+            for inst_id, inst in instances.items():
+                name = inst.get('semantic_name', 'unknown').lower()
+                centroid = inst.get('centroid', None)
+                if centroid is None or len(centroid) < 3:
+                    continue
+                self.object_db[name].append(tuple(centroid))
+
+            self.get_logger().info(
+                f'Loaded {len(instances)} instances {len(self.object_db)} categories from {instance_path}')
+
+            # Load 3D point cloud for visualization
+            if os.path.exists(map_3d_path):
+                data_3d = np.load(map_3d_path)
+                self.map_3d_points = data_3d['points']
+                if 'colors' in data_3d:
+                    c = data_3d['colors']
+                    self.map_3d_colors = (c * 255).astype(np.uint8) if c.max() <= 1.0 else c.astype(np.uint8)
+                else:
+                    self.map_3d_colors = np.full((self.map_3d_points.shape[0], 3), 128, dtype=np.uint8)
+            else:
+                self.get_logger().warn(f'⚠️ 3D map not found: {map_3d_path}')
+
+        except Exception as e:
+            self.get_logger().error(f'❌ Failed to load instance map: {e}')
+            import traceback
+            traceback.print_exc()
 
     # --------------------------------------------------------------
     def load_semantic_map(self, map_path: str, sem_path: str, auto_align: bool, map_3d_path: str):
@@ -232,7 +281,20 @@ class ObjectQueryServer(Node):
     def search_object(self, name: str):
         if name in self.object_db:
             instances = self.object_db[name]
-            best_pt = min(instances, key=lambda p: p[0]**2 + p[1]**2 + p[2]**2)
+            "Let user to choose the object position if multiple instances exist (e.g. multiple chairs)."
+            if len(instances) > 1:
+                self.get_logger().info(f"Multiple instances of '{name}' found. Selecting one randomly for query response.")
+                for i, inst in enumerate(instances):
+                    self.get_logger().info(f"  [{i}] Position: ({inst[0]:.2f}, {inst[1]:.2f}, {inst[2]:.2f})")
+                choosen_index = input(f"Multiple instances of '{name}' found. Enter index (0-{len(instances)-1}) to select, or press Enter for random: ")
+                if choosen_index.isdigit():
+                    idx = int(choosen_index)
+                    if 0 <= idx < len(instances):
+                        return True, Point(x=instances[idx][0], y=instances[idx][1], z=instances[idx][2])
+                    else:
+                        self.get_logger().warn(f"Invalid index entered. Selecting randomly.")
+            else:
+                best_pt = min(instances, key=lambda p: p[0]**2 + p[1]**2 + p[2]**2)
             return True, Point(x=best_pt[0], y=best_pt[1], z=best_pt[2])
         else:
             return False, Point(x=0.0, y=0.0, z=0.0)

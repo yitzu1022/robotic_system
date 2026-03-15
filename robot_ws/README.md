@@ -1,4 +1,4 @@
-# Robot Workspace Technical Report
+# Robot Workspace Description
 
 <a id="table-of-contents"></a>
 
@@ -7,7 +7,7 @@
 - [1. Executive Summary](#section-1-executive-summary)
 - [2. Repository Structure](#section-2-repository-structure)
 - [3. Environment and Dependency Configuration](#section-3-environment-and-dependency-configuration)
-- [4. Package-by-Package Technical Analysis](#section-4-package-by-package-technical-analysis)
+- [4. Package Descriptions](#section-4-package-by-package-technical-analysis)
 - [4.1 `decision_maker`](#section-41-decision_maker)
 - [4.2 `decision_maker_interfaces`](#section-42-decision_maker_interfaces)
 - [4.3 `get_pose`](#section-43-get_pose)
@@ -17,18 +17,14 @@
 - [4.7 `map_alignment`](#section-47-map_alignment)
 - [4.8 `object_query`](#section-48-object_query)
 - [4.9 `object_query_interfaces`](#section-49-object_query_interfaces)
-- [4.10 `semantic_slam`](#section-410-semantic_slam)
-- [4.11 `semantic_slam_interfaces`](#section-411-semantic_slam_interfaces)
+- [4.8 `semantic_slam`](#section-48-semantic_slam)
+- [4.8 `semantic_slam_interfaces`](#section-48-semantic_slam_interfaces)
 - [5. Custom ROS Interfaces Summary](#section-5-custom-ros-interfaces-summary)
 - [6. Data Assets and Utility Scripts](#section-6-data-assets-and-utility-scripts)
 - [6.1 `data/Util`](#section-61-datautil)
 - [6.2 `data/lab`](#section-62-datalab)
 - [7. Runtime Interaction Between Packages](#section-7-runtime-interaction-between-packages)
-- [8. Testing and Quality Support](#section-8-testing-and-quality-support)
-- [9. Observations on Codebase Maturity](#section-9-observations-on-codebase-maturity)
-- [10. Key Files Worth Immediate Attention](#section-10-key-files-worth-immediate-attention)
-- [11. Conclusion](#section-11-conclusion)
-- [12. Practical Setup and Execution Guide](#section-12-practical-setup-and-execution-guide)
+- [8. Practical Setup and Execution Guide](#section-8-practical-setup-and-execution-guide)
 
 <a id="section-1-executive-summary"></a>
 
@@ -61,8 +57,8 @@ robot_ws/
 ├── build/              # Colcon build outputs
 ├── install/            # Installed package outputs
 ├── log/                # Historical colcon build logs
-├── requirements.txt    # Python dependency snapshot
-└── environment.yml     # Minimal Conda environment descriptor
+├── requirements.txt    # Python dependencies
+└── environment.yml     # Conda environment descriptor
 ```
 
 ### 2.1 Source Packages
@@ -99,9 +95,9 @@ The `build/`, `install/`, and `log/` directories are generated artifacts rather 
 
 ## 3. Environment and Dependency Configuration
 
-### 3.1 `requirements.txt`
+### 3.1 `requirement.txt`
 
-`requirements.txt` is a large environment snapshot rather than a minimal hand-curated dependency list. It includes:
+`requirement.txt` is a large environment rather than a minimal hand-curated dependency list. It includes:
 
 - ROS 2 Python packages and ament tooling
 - Scientific computing libraries such as `numpy`, `scipy`, and `matplotlib`
@@ -116,9 +112,56 @@ This file indicates that the workspace depends on a broader robotics and ML envi
 
 `environment.yml` defines a minimal Conda environment named `robot_ros`. The file is sparse and does not enumerate the full set of dependencies required by the workspace. In practice, `requirements.txt` and the package manifests are more informative than `environment.yml`.
 
+### 3.3 Docker Environment Setup
+
+The repository root already contains:
+
+- `/robotic-project/Dockerfile`
+- `/robotic-project/entrypoint.sh`
+- `/robotic-project/.dockerignore`
+
+The Dockerfile:
+
+- starts from `ros:humble-ros-base-jammy`
+- installs ROS desktop tooling, RViz, rosbag, RealSense support, and build utilities
+- builds `librealsense` from source
+- installs Miniconda under `/opt/conda`
+- creates the `robot_ros` Conda environment
+- installs Python dependencies and Kachaka API support
+- builds the ROS 2 workspace with `colcon`
+
+The entrypoint script:
+
+- sources `/opt/ros/humble/setup.bash`
+- activates the `robot_ros` Conda environment
+- rebuilds the workspace with `colcon build --symlink-install`
+- sources `install/setup.bash`
+- opens an interactive shell
+
+#### 3.3.1 Build the Docker Image
+
+```bash
+cd /robotic
+docker compose build
+```
+After the build completes, the image will be available locally as `robotic-project_robot_system:latest`.
+
+Then run the container:
+
+```bash
+docker compose up -d
+```
+
+#### 3.3.2 Run the Container for Development
+```bash
+xhost +local:root
+
+docker exec -it robot_system bash
+```
+
 <a id="section-4-package-by-package-technical-analysis"></a>
 
-## 4. Package-by-Package Technical Analysis
+## 4. Package Descriptions
 
 <a id="section-41-decision_maker"></a>
 
@@ -133,12 +176,9 @@ This file indicates that the workspace depends on a broader robotics and ML envi
 | File | Role |
 |---|---|
 | `decision_maker/decision_maker_node.py` | Primary task-execution node for the integrated system |
-| `decision_maker/decision_maker_node_calib.py` | Calibration-oriented variant of the main decision node |
-| `decision_maker/decision_maker_node_isaacsim.py` | Variant adapted for Isaac Sim style integration |
 | `decision_maker/decision_maker_test.py` | Experimental or test-oriented variant of the orchestration node |
 | `decision_maker/text_command_node.py` | Reads terminal input and publishes text commands |
 | `decision_maker/audio_command_node.py` | Records audio, runs speech-to-text, and publishes commands |
-| `decision_maker/audio_command_node_p2t.py` | Alternate audio command implementation |
 | `decision_maker/nl_command_node.py` | Natural-language command publisher node |
 | `decision_maker/cancel_command_node.py` | Publishes cancellation requests |
 | `decision_maker/mock_nav_server.py` | Mock navigation action server for testing |
@@ -146,10 +186,6 @@ This file indicates that the workspace depends on a broader robotics and ML envi
 | `decision_maker/scenario_library.py` | Maps human phrases to multi-step task sequences |
 | `decision_maker/nl_planner.py` | World model and command-to-primitive formatting utilities |
 | `decision_maker/command_types.py` | Command data abstraction |
-| `launch/decision_with_text.launch.py` | Launches the main decision node with a text command source |
-| `launch/mock_actions.launch.py` | Launches mock navigation and grasp action servers |
-| `launch/mock_actions_isaacsim.launch.py` | Launches mock grasp support for simulator-oriented workflows |
-| `stretch/audio/*.py` | Audio support utilities for recording, speech-to-text, and text-to-speech |
 
 ### Core Behavior
 
@@ -158,7 +194,6 @@ The central implementation is `decision_maker_node.py`. Its responsibilities are
 - subscribe to `/manual_command` and `/cancel_command`
 - maintain a bounded command queue
 - use `scenario_library.py` to parse high-level tasks such as `go to`, `bring`, `give me`, `fetch drink`, and `clean table`
-- resolve semantic objects and named places through `WorldModel`
 - call the `ObjectQuery` service to retrieve object coordinates
 - load a 3D-to-2D alignment YAML file and convert semantic-map coordinates into the 2D navigation frame
 - optionally display queried targets on a 2D map through an OpenCV visualizer
@@ -188,14 +223,12 @@ This design separates command semantics from execution mechanics.
 
 ### `nl_planner.py`
 
-`nl_planner.py` contains the `WorldModel` class. It bridges semantic queries and static place definitions:
+`nl_planner.py` bridges semantic queries and static place definitions:
 
-- static places such as `me`, `home`, and `kitchen` are resolved locally
+- static places such as `me` and `home` are resolved locally
 - unknown places are forwarded to the `ObjectQuery` service
 - objects are always resolved through the semantic map service
 - `fmt_goto()` formats pose tuples into the primitive `goto:` command syntax expected by the executor
-
-This package is therefore the task-level coordination layer of the workspace.
 
 <a id="section-42-decision_maker_interfaces"></a>
 
@@ -203,18 +236,15 @@ This package is therefore the task-level coordination layer of the workspace.
 
 ### Purpose
 
-This package defines custom ROS 2 actions used by the orchestration layer for manipulation and task dispatch.
+This package defines custom ROS 2 actions used for manipulation and task dispatch.
 
 ### Interface Files
 
 | File | Description |
 |---|---|
 | `action/TaskCommand.action` | Generic text task action |
-| `action/Grasp.action` | Grasp-only action with success/message feedback |
-| `action/Place.action` | Place-only action with success/message feedback |
-| `action/GraspPlace.action` | Combined manipulation action carrying `object_id` and `target_bin` |
 
-These actions provide the type contracts required by nodes in `decision_maker`.
+The action provides the type contracts required by nodes in `decision_maker`.
 
 <a id="section-43-get_pose"></a>
 
@@ -281,8 +311,6 @@ This package connects to the Kachaka robot API and republishes robot LiDAR data 
 - supports configurable topic name, frame override, publish rate, cursor-based deduplication, and reconnection policy
 - runs with callback groups and a multi-threaded executor to separate timer and I/O behavior
 
-This package is a hardware-facing integration layer that exposes Kachaka LiDAR data to the ROS graph.
-
 <a id="section-46-kachaka_nav"></a>
 
 ## 4.6 `kachaka_nav`
@@ -295,29 +323,8 @@ This package is a hardware-facing integration layer that exposes Kachaka LiDAR d
 
 | File | Role |
 |---|---|
-| `kachaka_nav/nav_node.py` | Navigation action server with driver abstraction and path execution |
 | `kachaka_nav/modular_nav.py` | Additional navigation server implementations |
-| `kachaka_nav/modular_nav_rrt.py` | RRT-based navigation action server that reads YAML map metadata directly |
 | `kachaka_nav/robot_driver.py` | Driver abstraction for real Kachaka hardware and ROS simulation |
-| `kachaka_nav/coord_bridge_semantic.py` | Coordinate bridge between semantic and navigation frames |
-
-### Planning and Utility Files
-
-| File | Role |
-|---|---|
-| `kachaka_nav/rrt_lib.py` | Core RRT planning implementation for occupancy-map navigation |
-| `kachaka_nav/rrt_lib_debug.py` | Debug-oriented RRT variant |
-| `kachaka_nav/rrt_lib_old.py` | Older RRT implementation with different map assumptions |
-| `kachaka_nav/align_maps.py` | Utility for comparing or aligning map metadata |
-| `kachaka_nav/aligner_nudge.py` | Interactive or incremental map nudge tool |
-| `kachaka_nav/calibrate.py` | Map calibration helper node |
-| `kachaka_nav/click_to_nav.py` | Click-driven navigation utility |
-| `kachaka_nav/get_coords.py` | Coordinate extraction helper |
-| `kachaka_nav/verify_map.py` | Map validation and plotting tool |
-| `kachaka_nav/vis.py` | Generates occupancy maps from semantic point clouds |
-| `kachaka_nav/vis_map.py` | Robot-on-map visualization |
-| `kachaka_nav/vis_kachaka.py` | Kachaka-specific visualization node |
-| `kachaka_nav/npz2ply.py` | Converts semantic NPZ map output into PLY format |
 
 ### Navigation Architecture
 
@@ -354,7 +361,6 @@ This package is the motion execution backbone of the workspace.
 | File | Role |
 |---|---|
 | `map_alignment/map_alignment_v2.py` | Main offline-friendly alignment pipeline |
-| `map_alignment/map_alignment.py` | Earlier, more extensive alignment implementation |
 | `map_alignment/collect_data.py` | Data capture utility for synchronized sensor and pose collection |
 | `map_alignment/lidar_camera_link_bridge.py` | TF bridge between lidar and camera frames |
 
@@ -400,14 +406,7 @@ It supports calibration dataset generation rather than online navigation directl
 |---|---|
 | `object_query/object_query_server.py` | Primary semantic object query service |
 | `object_query/object_query_client.py` | Simple service client |
-| `object_query/coord_bridge.py` | Coordinate bridge client |
-| `object_query/object_query_server_2d3d.py` | Variant mixing 2D and 3D semantics |
-| `object_query/object_query_server_kachaka.py` | Variant oriented toward Kachaka-specific use |
-| `object_query/object_query_server_norm.py` | Normalized variant of the query server |
-| `object_query/object_query_server_old.py` | Older minimal implementation |
 | `object_query/object_query_test.py` | Expanded test or experimental server variant |
-| `object_query/analyse_map.py` | Map redundancy analysis helper |
-| `object_query/npz_read.py` | NPZ inspection helper |
 
 ### Core Behavior
 
@@ -427,8 +426,6 @@ The query logic:
 - returns the nearest matching instance
 - publishes RViz markers for the queried object only
 
-This package is directly consumed by `decision_maker.WorldModel` and `DecisionMakingNode`.
-
 <a id="section-49-object_query_interfaces"></a>
 
 ## 4.9 `object_query_interfaces`
@@ -445,46 +442,8 @@ This package defines the semantic lookup service contract.
 
 This service is the main interface between symbolic task commands and semantic map perception.
 
-<a id="section-410-semantic_slam"></a>
+<a id="section-48-semantic_slam"></a>
 
-## 4.10 `semantic_slam`
-
-### Purpose
-
-`semantic_slam` is an experimental or prototype package that simulates a semantic Gaussian-splatting SLAM action server.
-
-### Main Files
-
-| File | Role |
-|---|---|
-| `semantic_slam/run_slam_server.py` | Action server that generates synthetic incremental map data |
-| `semantic_slam/run_slam_client.py` | Client for invoking the action |
-
-### Core Behavior
-
-`run_slam_server.py`:
-
-- accepts a `RunSlam` action goal
-- incrementally generates synthetic map arrays such as `means3D`, rotations, scales, opacities, RGB values, and semantic IDs
-- appends these increments in memory
-- publishes feedback containing the current number of splats
-- optionally saves the resulting map as a compressed NPZ file when stopped or completed
-
-This package is not a production SLAM implementation. It is a scaffold or interface prototype that demonstrates how a semantic SLAM subsystem could integrate with the rest of the workspace.
-
-<a id="section-411-semantic_slam_interfaces"></a>
-
-## 4.11 `semantic_slam_interfaces`
-
-### Purpose
-
-This package defines the custom action contract used by `semantic_slam`.
-
-### Interface File
-
-| File | Description |
-|---|---|
-| `action/RunSlam.action` | Start/stop semantic SLAM, return saved map URI and splat count |
 
 <a id="section-5-custom-ros-interfaces-summary"></a>
 
@@ -497,8 +456,6 @@ The workspace defines several custom interfaces that form the contract between p
 | `kachaka_interfaces` | `Navigate.action` | Motion request to a target coordinate |
 | `object_query_interfaces` | `ObjectQuery.srv` | Semantic lookup by object name |
 | `decision_maker_interfaces` | `TaskCommand.action` | Generic task submission |
-| `decision_maker_interfaces` | `Grasp.action` | Grasp-only action |
-| `decision_maker_interfaces` | `Place.action` | Place-only action |
 | `decision_maker_interfaces` | `GraspPlace.action` | Combined manipulation request |
 | `semantic_slam_interfaces` | `RunSlam.action` | Semantic SLAM lifecycle request |
 
@@ -510,7 +467,7 @@ These interfaces are important because they decouple the packages cleanly. The o
 
 <a id="section-61-datautil"></a>
 
-## 6.1 `data/Util`
+## 6.1 `data/Util` Folder
 
 The `data/Util/` directory contains conversion tools and baseline map assets used by semantic querying and alignment.
 
@@ -522,8 +479,6 @@ The `data/Util/` directory contains conversion tools and baseline map assets use
 | `Final_SEM_GS_converted.npz` | Semantic map asset used by object-query nodes |
 | `Final_SEM_GS_converted_meta.json` | Metadata describing semantic segments/categories |
 | `alignment.yaml` | Main 3D-to-2D alignment file consumed by `decision_maker` |
-| `alignment_modified.yaml` | Additional alignment variant |
-| `alignment_origin.yaml` | Original alignment variant |
 | `semantic_legend.json` | Semantic category/color reference |
 | `actual_color_mapping.json` | Color mapping asset |
 
@@ -535,9 +490,7 @@ The `data/Util/` directory contains conversion tools and baseline map assets use
 | `read_ply.py` | Reads PLY point clouds |
 | `read_npz.py` | Reads NPZ map files |
 | `downsample.py` | Downsampling utility |
-| `convert_sem_gs_exact.py` | Converts semantic Gaussian-splatting outputs |
-| `convert_sem_gs_rgb_ply.py` | Converts semantic map data into RGB PLY |
-| `create_semantic_meta.py` | Builds semantic metadata JSON |
+| `convert_sem_gs_exact.py` | Converts ply semantic Gaussian-splatting outputs to NPZ format |
 | `sample_timestamp.py` | Sampling helper for timestamps |
 | `get_timestamp.py` | Timestamp extraction helper |
 | `renumber_pairs.py` | Renumbering helper for paired data |
@@ -566,7 +519,6 @@ The `data/lab/` directory appears to be a concrete environment dataset for a lab
 
 | File | Role |
 |---|---|
-| `align.py` | Alignment helper |
 | `align_map.py` | Map comparison/alignment tool |
 | `auto_align.py` | Automatic alignment utility |
 | `export_kachaka_map.py` | Kachaka map export helper |
@@ -588,11 +540,10 @@ The intended integrated workflow is as follows:
 
 - `decision_maker_node` receives the command.
 - `scenario_library.py` converts the utterance into primitive navigation and manipulation actions.
-- `WorldModel` resolves places and objects.
 
 ### 7.3 Semantic Lookup
 
-- `WorldModel` or `DecisionMakingNode` calls `ObjectQuery.srv`.
+-  `DecisionMakingNode` calls `ObjectQuery.srv`.
 - `object_query_server.py` returns a centroid in the semantic 3D map frame.
 
 ### 7.4 Frame Conversion
@@ -608,7 +559,7 @@ The intended integrated workflow is as follows:
 
 ### 7.6 Manipulation Execution
 
-- `decision_maker_node.py` sends `GraspPlace` or related actions.
+- `decision_maker_node.py` sends `TaskCommand` to the robot arm manipulation node.
 - mock servers can emulate this during testing.
 
 ### 7.7 Visualization and Debugging
@@ -620,80 +571,18 @@ The intended integrated workflow is as follows:
 
 This interaction pattern confirms that the workspace is not a collection of isolated experiments; it is an integrated semantic-task robotics stack centered on ROS 2 message passing and action/service composition.
 
-<a id="section-8-testing-and-quality-support"></a>
+<a id="section-8-practical-setup-and-execution-guide"></a>
 
-## 8. Testing and Quality Support
-
-Most Python packages contain standard ROS 2 lint-style tests:
-
-- `test_flake8.py`
-- `test_pep257.py`
-- `test_copyright.py`
-
-These files indicate baseline attention to packaging and style compliance. However, the workspace appears to rely more heavily on integration-oriented scripts, experimental variants, and runtime testing than on extensive unit-test coverage of business logic.
-
-<a id="section-9-observations-on-codebase-maturity"></a>
-
-## 9. Observations on Codebase Maturity
-
-Several characteristics are visible across the repository:
-
-### Strengths
-
-- The workspace is modular and uses ROS 2 interfaces appropriately.
-- Package responsibilities are generally well separated.
-- Semantic querying, alignment, and navigation are connected into a coherent pipeline.
-- The repository includes practical utilities for data conversion and environment preparation.
-- Launch files and mock servers support incremental testing.
-
-### Signs of Ongoing Development
-
-- Many `package.xml` files still contain placeholder descriptions and license fields.
-- Several packages contain multiple experimental variants such as `_old`, `_norm`, `_test`, and simulator-specific nodes.
-- `requirements.txt` is a full environment snapshot, which is useful for reproduction but less useful for long-term dependency maintenance.
-- The codebase mixes production-oriented nodes with research or prototype scripts.
-
-Overall, the workspace should be understood as an actively evolving robotics development environment rather than a finalized product repository.
-
-<a id="section-10-key-files-worth-immediate-attention"></a>
-
-## 10. Key Files Worth Immediate Attention
-
-For any engineer onboarding to this workspace, the most important files to read first are:
-
-1. `src/decision_maker/decision_maker/decision_maker_node.py`
-2. `src/decision_maker/decision_maker/scenario_library.py`
-3. `src/decision_maker/decision_maker/nl_planner.py`
-4. `src/object_query/object_query/object_query_server.py`
-5. `src/kachaka_nav/kachaka_nav/nav_node.py`
-6. `src/kachaka_nav/kachaka_nav/robot_driver.py`
-7. `src/map_alignment/map_alignment/map_alignment_v2.py`
-8. `data/Util/alignment.yaml`
-9. `src/object_query_interfaces/srv/ObjectQuery.srv`
-10. `src/kachaka_interfaces/action/Navigate.action`
-
-These files capture the core task pipeline, inter-package contracts, and frame-conversion logic.
-
-<a id="section-11-conclusion"></a>
-
-## 11. Conclusion
-
-`robot_ws` is a ROS 2 robotics workspace built around semantic task execution in a mapped environment. Its architecture combines command understanding, semantic map querying, frame alignment, navigation, and hardware integration. The most important technical idea in the repository is the bridge between semantic 3D reconstruction outputs and 2D robot navigation, implemented through `object_query`, `map_alignment`, `decision_maker`, and `kachaka_nav`.
-
-The repository also contains significant supporting infrastructure: data-conversion tools, environment-specific datasets, generated build artifacts, mock action servers, visualization helpers, and prototype SLAM interfaces. As a result, this workspace serves both as an application stack for semantic mobile manipulation experiments and as a development platform for robotics research and system integration.
-
-<a id="section-12-practical-setup-and-execution-guide"></a>
-
-## 12. Practical Setup and Execution Guide
+## 8. Setup and Execution Guide
 
 This section adds an operator-oriented guide for building the environment and launching the key packages discussed above. The commands below are based on the current repository layout under `/robotic-project`.
 
-### 12.1 Path Assumptions
+### 8.1 Path Assumptions
 
 The instructions in this section assume:
 
-- project root: `/robotic-project`
-- ROS 2 workspace root: `/robotic-project/robot_ws`
+- project root: `/robotic_system_`
+- ROS 2 workspace root: `/robotic_system/robot_ws`
 - ROS distribution: `humble`
 - Conda environment name: `robot_ros`
 
@@ -704,7 +593,7 @@ Because several packages use relative default paths such as `data/Util/alignment
 
 The examples below use absolute paths to avoid ambiguity.
 
-### 12.2 Local Conda Environment Setup
+### 8.2 Local Conda Environment Setup
 
 The repository already includes:
 
@@ -714,17 +603,17 @@ The repository already includes:
 
 The Dockerfile is the most complete reference for the intended Python environment. A local Conda workflow equivalent to that Dockerfile is shown below.
 
-#### 12.2.1 Create and Activate the Environment
+#### 8.2.1 Create and Activate the Environment
 
 ```bash
 cd /robotic-project/robot_ws
 
 source "$(conda info --base)/etc/profile.d/conda.sh"
-conda env create -f environment.yml || conda create -n robot_ros python=3.10 -y
+conda env create -f environment.yml || conda create -n robot_ros python=3.8 -y
 conda activate robot_ros
 ```
 
-#### 12.2.2 Install Python Tooling Used by the Workspace
+#### 8.2.2 Install Python Tooling Used by the Workspace
 
 ```bash
 pip install --upgrade pip setuptools wheel
@@ -737,7 +626,7 @@ pip install kachaka-api==3.14.4.0
 pip install pyyaml tqdm transforms3d
 ```
 
-#### 12.2.3 Install Packages That the Dockerfile Installs Through Conda
+#### 8.2.3 Install Packages That the Dockerfile Installs Through Conda
 
 The Dockerfile installs several packages through Conda rather than `pip`, mainly for compatibility on ARM and robotics systems:
 
@@ -747,13 +636,13 @@ conda install -n robot_ros -c conda-forge -y open3d
 conda install -n robot_ros -c conda-forge -y pyrealsense2 || true
 ```
 
-#### 12.2.4 Install the Workspace Python Requirements
+#### 8.2.4 Install the Workspace Python Requirements
 
 ```bash
 pip install -r /robotic-project/robot_ws/requirements.txt
 ```
 
-#### 12.2.5 Make ROS Python Packages Visible Inside the Conda Environment
+#### 8.2.5 Make ROS Python Packages Visible Inside the Conda Environment
 
 The Dockerfile adds ROS Humble site-packages into the Conda environment through a `.pth` file. The same idea can be applied locally:
 
@@ -763,13 +652,13 @@ import sysconfig
 from pathlib import Path
 
 purelib = Path(sysconfig.get_paths()["purelib"])
-(purelib / "ros_humble_local.pth").write_text("/opt/ros/humble/lib/python3.10/site-packages\n")
+(purelib / "ros_humble_local.pth").write_text("/opt/ros/humble/lib/python3.8/site-packages\n")
 PY
 ```
 
 If the local ROS installation uses a different Python minor version, adjust the path accordingly.
 
-#### 12.2.6 Build the Workspace
+#### 8.2.6 Build the Workspace
 
 ```bash
 cd /robotic-project/robot_ws
@@ -779,7 +668,7 @@ colcon build --merge-install --symlink-install
 source install/setup.bash
 ```
 
-#### 12.2.7 Recommended Shell Initialization for Every New Terminal
+#### 8.2.7 Recommended Shell Initialization for Every New Terminal
 
 ```bash
 cd /robotic-project/robot_ws
@@ -787,84 +676,14 @@ source /opt/ros/humble/setup.bash
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate robot_ros
 source install/setup.bash
-export PYTHONPATH=$PYTHONPATH:/opt/conda/envs/robot_ros/lib/python3.10/site-packages
+export PYTHONPATH=$PYTHONPATH:/opt/conda/envs/robot_ros/lib/python3.8/site-packages
 ```
 
 If the environment is local rather than container-based, replace `/opt/conda/envs/robot_ros/...` with the local Conda environment path shown by `conda info --envs`.
 
-### 12.3 Docker Environment Setup
 
-The repository root already contains:
 
-- `/robotic-project/Dockerfile`
-- `/robotic-project/entrypoint.sh`
-- `/robotic-project/.dockerignore`
-
-The Dockerfile:
-
-- starts from `ros:humble-ros-base-jammy`
-- installs ROS desktop tooling, RViz, rosbag, RealSense support, and build utilities
-- builds `librealsense` from source
-- installs Miniconda under `/opt/conda`
-- creates the `robot_ros` Conda environment
-- installs Python dependencies and Kachaka API support
-- builds the ROS 2 workspace with `colcon`
-
-The entrypoint script:
-
-- sources `/opt/ros/humble/setup.bash`
-- activates the `robot_ros` Conda environment
-- rebuilds the workspace with `colcon build --symlink-install`
-- sources `install/setup.bash`
-- opens an interactive shell
-
-#### 12.3.1 Build the Docker Image
-
-```bash
-cd /robotic-project
-docker build -t robotic-project:humble .
-```
-
-#### 12.3.2 Run the Container for Development
-
-For terminal-only use:
-
-```bash
-docker run --rm -it \
-  --net=host \
-  --ipc=host \
-  --privileged \
-  -v /robotic-project/robot_ws:/robot_ws \
-  robotic-project:humble
-```
-
-For GUI-based tools such as OpenCV windows or RViz:
-
-```bash
-xhost +local:root
-
-docker run --rm -it \
-  --net=host \
-  --ipc=host \
-  --privileged \
-  -e DISPLAY=$DISPLAY \
-  -v /tmp/.X11-unix:/tmp/.X11-unix \
-  -v /dev:/dev \
-  -v /robotic-project/robot_ws:/robot_ws \
-  robotic-project:humble
-```
-
-After the container starts, the entrypoint should already leave the shell in a usable state. If needed, re-run:
-
-```bash
-source /opt/ros/humble/setup.bash
-source /opt/conda/etc/profile.d/conda.sh
-conda activate robot_ros
-cd /robot_ws
-source install/setup.bash
-```
-
-### 12.4 Workspace Build Commands
+### 8.4 Workspace Build Commands
 
 Whether using the local Conda setup or the container, the standard workspace build sequence is:
 
@@ -879,11 +698,11 @@ source install/setup.bash
 
 If you are already inside the Docker container, replace the workspace path with `/robot_ws`.
 
-### 12.5 Package Execution Commands
+### 8.5 Package Execution Commands
 
 This subsection provides the practical `ros2 run` commands for the packages the repository uses most often in the semantic-task pipeline.
 
-### 12.5.1 Start `object_query`
+### 8.5.1 Start `object_query`
 
 This node loads the semantic map, publishes the point cloud and queried markers, and exposes the `ObjectQuery` service.
 
@@ -894,31 +713,12 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate robot_ros
 source install/setup.bash
 
-ros2 run object_query object_query_server --ros-args \
-  -p 3dmap_path:=/robotic-project/robot_ws/data/Util/Final_GS.npz \
-  -p map_path:=/robotic-project/robot_ws/data/Util/Final_SEM_GS_converted.npz \
-  -p semantic_path:=/robotic-project/robot_ws/data/Util/Final_SEM_GS_converted_meta.json \
-  -p auto_align:=false
+ros2 run object_query object_query_server
 ```
 
-Optional client test:
+### 8.5.2 Start `kachaka_nav`
 
-```bash
-ros2 run object_query object_query_client chair
-```
-
-### 12.5.2 Start `kachaka_nav`
-
-The package exports several executables:
-
-- `nav_node`
-- `modular_nav_node`
-- `modular_nav_node_rrt`
-- `coord_bridge`
-
-For direct navigation experiments, the most self-contained example in the current codebase is `modular_nav_node_rrt`, because it reads a Kachaka map YAML file and then derives the resolution and origin internally.
-
-#### Real Robot Example
+#### Real Robot Example (Kachaka moving platform)
 
 ```bash
 cd /robotic-project/robot_ws
@@ -927,34 +727,10 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate robot_ros
 source install/setup.bash
 
-ros2 run kachaka_nav modular_nav_node_rrt --ros-args \
-  -p use_sim:=false \
-  -p kachaka_ip:=192.168.0.157:26400 \
-  -p use_native_map:=true
+ros2 run kachaka_nav modular_nav_node
 ```
 
-#### Simulation Example
-
-```bash
-ros2 run kachaka_nav modular_nav_node_rrt --ros-args \
-  -p use_sim:=true \
-  -p use_native_map:=false
-```
-
-#### Alternate `nav_node` Example
-
-If you want to invoke the executable registered as `nav_node`, pass all planning inputs explicitly:
-
-```bash
-ros2 run kachaka_nav nav_node --ros-args \
-  -p use_sim:=false \
-  -p kachaka_ip:=192.168.0.157:26400 \
-  -p map_path:=/robotic-project/robot_ws/data/lab/kachaka_native.png \
-  -p meta_path:=/robotic-project/robot_ws/data/lab/kachaka_native.yaml \
-  -p points_path:=/robotic-project/robot_ws/data/lab/semantic_pcd_accumulated_gaussians.npz
-```
-
-### 12.5.3 Start `decision_maker`
+### 8.5.3 Start `decision_maker` node
 
 The main executable is `decision_maker_node`. It expects:
 
@@ -975,24 +751,7 @@ ros2 run decision_maker decision_maker_node --ros-args \
   -p map_yaml:=/robotic-project/robot_ws/data/lab/kachaka_native.yaml
 ```
 
-Other useful executables from the same package:
-
-```bash
-ros2 run decision_maker decision_maker_node_calib
-ros2 run decision_maker decision_maker_node_isaacsim
-ros2 run decision_maker decision_maker_test
-ros2 run decision_maker text_command_node
-ros2 run decision_maker audio_command_node
-ros2 run decision_maker cancel_command_node
-```
-
-If you only want to validate the orchestration flow without real downstream servers, the package also provides mocks:
-
-```bash
-ros2 launch decision_maker mock_actions.launch.py
-```
-
-### 12.5.4 Start `nl_command_node`
+### 8.5.4 Start `nl_command_node`
 
 `nl_command_node` is a terminal-based natural-language command publisher. It publishes text to `/manual_command` and displays feedback from `/task_status`.
 
@@ -1011,42 +770,16 @@ Example input after the node starts:
 ```text
 go to chair
 bring bottle to table
+bring apple on cabinet to table
 give me apple
 go home
 ```
 
-### 12.5.5 Optional Supporting Nodes
+### 8.6 Run the System in Multi-Terminal
 
-#### LiDAR from Kachaka API
+For an integrated manual test of the semantic navigation stack, open several terminals and launch the nodes in the following.
 
-```bash
-ros2 run kachaka_laser_api laser_from_api --ros-args \
-  -p kachaka_ip:=192.168.0.157:26400 \
-  -p topic_name:=/scan \
-  -p rate_hz:=5.0
-```
-
-#### TF to Pose
-
-```bash
-ros2 run get_pose tf_to_pose --ros-args \
-  -p target_frame:=map \
-  -p base_frame:=base_footprint \
-  -p rate_hz:=20.0
-```
-
-#### Semantic SLAM Prototype
-
-```bash
-ros2 run semantic_slam run_slam_server
-ros2 run semantic_slam run_slam_client
-```
-
-### 12.6 Recommended Multi-Terminal Launch Order
-
-For an integrated manual test of the semantic navigation stack, open several terminals and launch the nodes in the following order.
-
-#### Terminal 1: Semantic Query Service
+#### Terminal 1: Object Query Service
 
 ```bash
 cd /robotic-project/robot_ws
@@ -1068,13 +801,13 @@ source /opt/ros/humble/setup.bash
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate robot_ros
 source install/setup.bash
-ros2 run kachaka_nav modular_nav_node_rrt --ros-args \
+ros2 run kachaka_nav modular_nav_node --ros-args \
   -p use_sim:=false \
   -p kachaka_ip:=192.168.0.157:26400 \
   -p use_native_map:=true
 ```
 
-#### Terminal 3: Decision Layer
+#### Terminal 3: Decision Maker Node
 
 ```bash
 cd /robotic-project/robot_ws
@@ -1100,10 +833,3 @@ ros2 run decision_maker nl_command_node
 
 At this point, type commands such as `go to chair` or `bring bottle to table` in the `nl_command_node` terminal.
 
-### 12.7 Notes and Operational Caveats
-
-- The repository currently mixes several navigation and decision-maker variants. The commands above are based on the executables registered in the current `setup.py` files.
-- Relative file defaults in the source code can fail if the node is launched from another directory. Absolute parameter paths are safer.
-- The Dockerfile and entrypoint are currently the most complete description of the intended environment.
-- If OpenCV windows or RViz are required, X11 forwarding and device access must be enabled for Docker.
-- Real robot operation requires valid Kachaka network connectivity and, for sensor-related nodes, the necessary device permissions.
