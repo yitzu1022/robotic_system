@@ -77,13 +77,24 @@ class KachakaRealDriver:
 
     def stop(self):
         self.set_velocity(0.0, 0.0)
-
-    def move_native(self, x, y, yaw=0.0):
+    def move_native(self, x, y, yaw=0.0, wait_for_completion: bool = True):
         """
         Commands the real Kachaka to go to (x, y) using its internal navigation.
-        This handles path planning and obstacle avoidance automatically.
+        If `wait_for_completion` is False the command will be started and
+        this method will return immediately (the robot will continue moving).
         """
-        self.client.move_to_pose(x, y, yaw)
+        return self.client.move_to_pose(x, y, yaw, wait_for_completion=wait_for_completion)
+
+    def cancel_current_command(self):
+        """
+        Cancel the currently running command on the robot (if any).
+        Returns the API response (result, command) or None on error.
+        """
+        try:
+            return self.client.cancel_command()
+        except Exception as e:
+            print(f"cancel_current_command failed: {e}")
+            return None
     
     def is_command_running(self):
         """

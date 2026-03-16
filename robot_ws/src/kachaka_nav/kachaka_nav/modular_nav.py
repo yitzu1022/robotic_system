@@ -1,160 +1,3 @@
-'''import rclpy
-import math
-import time
-import yaml
-import os
-import numpy as np
-from rclpy.node import Node
-from rclpy.action import ActionServer
-from rclpy.callback_groups import ReentrantCallbackGroup
-from geometry_msgs.msg import PoseStamped
-from kachaka_interfaces.action import Navigate
-from kachaka_nav.robot_driver import KachakaRealDriver, RosSimDriver
-
-class ModularNavNode(Node):
-    def __init__(self):
-        super().__init__('modular_nav_node')
-        
-        # --- PARAMETERS ---
-        self.declare_parameter('use_sim', False)
-        self.declare_parameter('kachaka_ip', '192.168.0.157:26400') 
-        self.declare_parameter('user_map_yaml', '') 
-
-        self.use_sim = self.get_parameter('use_sim').value
-        robot_ip = self.get_parameter('kachaka_ip').value
-        yaml_path = self.get_parameter('user_map_yaml').value
-
-        # --- MAP ALIGNMENT STATE ---
-        self.map_offset_x = 0.0
-        self.map_offset_y = 0.0
-        self.map_yaw = 0.0
-        
-        if yaml_path and os.path.exists(yaml_path):
-            self.load_map_alignment(yaml_path)
-
-        # --- DRIVER SETUP ---
-        if self.use_sim:
-            self.driver = RosSimDriver(self)
-        else:
-            self.get_logger().info(f"Connecting to REAL KACHAKA at {robot_ip}...")
-            self.driver = KachakaRealDriver(robot_ip)
-
-        # --- PUBLISHERS ---
-        # 1. Pose in YOUR Map Frame (for your custom map view)
-        self.user_pose_pub = self.create_publisher(PoseStamped, '/user_pose', 10)
-        
-        # 2. Pose in KACHAKA Map Frame (NEW: for the grey map view)
-        self.kachaka_pose_pub = self.create_publisher(PoseStamped, '/kachaka_pose', 10)
-        
-        # Timer to publish both poses (10Hz)
-        self.create_timer(0.1, self.publish_pose_callback)
-
-        # --- ACTION SERVER ---
-        self._action_server = ActionServer(
-            self, Navigate, '/navigate_to_pose', 
-            self.execute_callback, 
-            callback_group=ReentrantCallbackGroup()
-        )
-        self.get_logger().info("✅ Modular Nav Ready (Dual-Frame Publishing).")
-
-    def load_map_alignment(self, yaml_path):
-        try:
-            with open(yaml_path, 'r') as f:
-                data = yaml.safe_load(f)
-            origin = data.get('origin', [0.0, 0.0, 0.0])
-            self.map_offset_x = float(origin[0])
-            self.map_offset_y = float(origin[1])
-            self.map_yaw = float(origin[2])
-        except Exception as e:
-            self.get_logger().error(f"❌ YAML Error: {e}")
-
-    # --- TRANSFORM HELPERS ---
-    def transform_user_to_kachaka(self, user_x, user_y):
-        cos_t = math.cos(self.map_yaw)
-        sin_t = math.sin(self.map_yaw)
-        rot_x = (user_x * cos_t) - (user_y * sin_t)
-        rot_y = (user_x * sin_t) + (user_y * cos_t)
-        return rot_x + self.map_offset_x, rot_y + self.map_offset_y
-
-    def transform_kachaka_to_user(self, k_x, k_y):
-        dx = k_x - self.map_offset_x
-        dy = k_y - self.map_offset_y
-        cos_t = math.cos(-self.map_yaw)
-        sin_t = math.sin(-self.map_yaw)
-        u_x = (dx * cos_t) - (dy * sin_t)
-        u_y = (dx * sin_t) + (dy * cos_t)
-        return u_x, u_y
-
-    # --- POSE LOOP ---
-    def publish_pose_callback(self):
-        # A. Get Raw Pose
-        k_x, k_y, k_yaw = self.driver.get_pose()
-        
-        # B. Publish Raw Pose (Kachaka Frame)
-        msg_k = PoseStamped()
-        msg_k.header.stamp = self.get_clock().now().to_msg()
-        msg_k.header.frame_id = "map" # Kachaka's map frame
-        msg_k.pose.position.x = k_x
-        msg_k.pose.position.y = k_y
-        self.kachaka_pose_pub.publish(msg_k)
-
-        # C. Transform & Publish User Pose (User Frame)
-        u_x, u_y = self.transform_kachaka_to_user(k_x, k_y)
-        msg_u = PoseStamped()
-        msg_u.header.stamp = self.get_clock().now().to_msg()
-        msg_u.header.frame_id = "user_map"
-        msg_u.pose.position.x = u_x
-        msg_u.pose.position.y = u_y
-        self.user_pose_pub.publish(msg_u)
-
-    def execute_callback(self, goal_handle):
-        # Receive in User Frame -> Convert to Kachaka -> Move
-        u_x = goal_handle.request.target_x
-        u_y = goal_handle.request.target_y
-        k_x, k_y = self.transform_user_to_kachaka(u_x, u_y)
-
-        self.get_logger().info(f"Navigating -> User({u_x:.2f}, {u_y:.2f}) | Kachaka({k_x:.2f}, {k_y:.2f})")
-        self.driver.move_native(k_x, k_y, yaw=0.0)
-
-        start_time = time.time()
-        success = False
-        feedback = Navigate.Feedback()
-
-        while rclpy.ok():
-            if time.time() - start_time > 60.0:
-                self.driver.stop()
-                break
-
-            curr_k_x, curr_k_y, _ = self.driver.get_pose()
-            dist = math.hypot(k_x - curr_k_x, k_y - curr_k_y)
-            
-            feedback.distance_remaining = dist
-            goal_handle.publish_feedback(feedback)
-
-            if dist < 0.15:
-                success = True
-                break
-            time.sleep(0.5)
-
-        if success:
-            goal_handle.succeed()
-        else:
-            goal_handle.abort()
-        return Navigate.Result(success=success)
-
-def main(args=None):
-    rclpy.init(args=args)
-    node = ModularNavNode()
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
-
-if __name__ == '__main__':
-    main()'''
 import rclpy
 import math
 import time
@@ -177,18 +20,21 @@ class ModularNavNode(Node):
         super().__init__('modular_nav_node')
         
         # === CALLBACK GROUPS ===
-        # 使用不同的 callback group 确保定时器和 action 可以并发执行
+        # use separate callback groups for timers and actions to allow them to run concurrently without blocking each other
         self.timer_callback_group = MutuallyExclusiveCallbackGroup()
         self.action_callback_group = ReentrantCallbackGroup()
         
         # --- PARAMETERS ---
         self.declare_parameter('use_sim', False)
-        self.declare_parameter('kachaka_ip', '192.168.0.157:26400') 
-        self.declare_parameter('user_map_yaml', '') 
+        self.declare_parameter('kachaka_ip', '192.168.0.157:26400')
+        self.declare_parameter('user_map_yaml', '')
+        # distance tolerance (meters) to consider goal reached
+        self.declare_parameter('goal_xy_tolerance', 0.5)
 
         self.use_sim = self.get_parameter('use_sim').value
         robot_ip = self.get_parameter('kachaka_ip').value
         yaml_path = self.get_parameter('user_map_yaml').value
+        self.goal_xy_tolerance = float(self.get_parameter('goal_xy_tolerance').value)
 
         # --- MAP ALIGNMENT STATE ---
         self.map_offset_x = 0.0
@@ -220,7 +66,7 @@ class ModularNavNode(Node):
         # 4. TF Broadcaster for robot position
         self.tf_broadcaster = TransformBroadcaster(self)
         
-        # Timer to publish both poses (10Hz) - 使用不同的 callback group
+        # Timer to publish both poses (10Hz) - use separate callback group
         self.create_timer(0.1, self.publish_pose_callback, callback_group=self.timer_callback_group)
 
         # --- ACTION SERVER ---
@@ -342,7 +188,12 @@ class ModularNavNode(Node):
         k_x, k_y = self.transform_user_to_kachaka(u_x, u_y)
 
         self.get_logger().info(f"Navigating -> User({u_x:.2f}, {u_y:.2f}) | Kachaka({k_x:.2f}, {k_y:.2f})")
-        self.driver.move_native(k_x, k_y, yaw=0.0)
+        # Start non-blocking move so we can cancel when within threshold
+        try:
+            self.driver.move_native(k_x, k_y, yaw=0.0, wait_for_completion=False)
+        except TypeError:
+            # older driver may not accept wait_for_completion; fallback to blocking
+            self.driver.move_native(k_x, k_y, yaw=0.0)
 
         start_time = time.time()
         success = False
@@ -350,7 +201,15 @@ class ModularNavNode(Node):
 
         while rclpy.ok():
             if time.time() - start_time > 60.0:
-                self.driver.stop()
+                # timeout: attempt to cancel and stop
+                try:
+                    self.driver.cancel_current_command()
+                except Exception:
+                    pass
+                try:
+                    self.driver.stop()
+                except Exception:
+                    pass
                 break
 
             curr_k_x, curr_k_y, _ = self.driver.get_pose()
@@ -359,7 +218,16 @@ class ModularNavNode(Node):
             feedback.distance_remaining = dist
             goal_handle.publish_feedback(feedback)
 
-            if dist < 0.30:
+            if dist < self.goal_xy_tolerance:
+                # we're within desired tolerance: cancel robot's internal nav and stop
+                try:
+                    self.driver.cancel_current_command()
+                except Exception:
+                    pass
+                try:
+                    self.driver.stop()
+                except Exception:
+                    pass
                 success = True
                 break
             time.sleep(0.5)

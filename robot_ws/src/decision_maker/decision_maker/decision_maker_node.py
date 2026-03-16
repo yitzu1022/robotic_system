@@ -545,16 +545,16 @@ class DecisionMakingNode(Node):
     def _execute_grasp(self, cmd: str) -> bool:
         obj = cmd.split(':', 1)[1].strip()
 
-        pos = self._query_object_position(obj)
-        if not pos:
-            self.get_logger().warn(f"⚠️ Skipping grasp — position unavailable for '{obj}'.")
-            return False
+        # pos = self._query_object_position(obj)
+        # if not pos:
+        #    self.get_logger().warn(f"⚠️ Skipping grasp — position unavailable for '{obj}'.")
+        #    return False
 
         return self._send_task_command(f'grasp the {obj}', 'GRASP', timeout_sec=300.0)
 
     def _execute_place(self, cmd: str) -> bool:
         dest = cmd.split(':', 1)[1].strip()
-        return self._send_task_command(f'place to {dest}', 'PLACE', timeout_sec=150.0)
+        return self._send_task_command(f'place to {dest}', 'PLACE', timeout_sec=300.0)
 
     # =============================================================
     # FEEDBACK / CANCEL / UTILITIES
