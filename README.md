@@ -170,66 +170,230 @@ docker exec -it robot_system bash
 
 ### Purpose
 
-`decision_maker` is the central orchestration package. It receives human commands, transforms them into primitive actions, queries semantic object locations, converts those coordinates into the navigation frame, and dispatches navigation and manipulation requests to downstream servers.
+`decision_maker` is the orchestration layer that connects human command input, semantic lookup, coordinate conversion, navigation, and manipulation. In this repository it is the package that turns a short phrase such as `go to chair` or `bring bottle to table` into a concrete execution pipeline involving ROS topics, services, and actions.
 
 ### Main Files
 
 | File | Role |
 |---|---|
-| `decision_maker/decision_maker_node.py` | Primary task-execution node for the integrated system |
+| `decision_maker/decision_maker_node.py` | Main execution node that plans command batches and dispatches navigation/manipulation requests |
 | `decision_maker/decision_maker_test.py` | Experimental or test-oriented variant of the orchestration node |
 | `decision_maker/text_command_node.py` | Reads terminal input and publishes text commands |
 | `decision_maker/audio_command_node.py` | Records audio, runs speech-to-text, and publishes commands |
-| `decision_maker/nl_command_node.py` | Natural-language command publisher node |
+| `decision_maker/nl_command_node.py` | Terminal-based natural-language command frontend with live task-status feedback |
 | `decision_maker/cancel_command_node.py` | Publishes cancellation requests |
 | `decision_maker/mock_nav_server.py` | Mock navigation action server for testing |
 | `decision_maker/mock_grasp_server.py` | Mock grasp/place action server for testing |
-| `decision_maker/scenario_library.py` | Maps human phrases to multi-step task sequences |
-| `decision_maker/nl_planner.py` | World model and command-to-primitive formatting utilities |
+| `decision_maker/scenario_library.py` | Scenario templates that translate phrases into primitive execution steps |
+| `decision_maker/nl_planner.py` | Lightweight world model used by scenarios to resolve objects and places |
 | `decision_maker/command_types.py` | Command data abstraction |
 
 ### Core Behavior
 
-The central implementation is `decision_maker_node.py`. Its responsibilities are:
+At runtime, the package is organized as a three-stage chain:
 
-- subscribe to `/manual_command` and `/cancel_command`
-- maintain a bounded command queue
-- use `scenario_library.py` to parse high-level tasks such as `go to`, `bring`, `give me`, `fetch drink`, and `clean table`
-- call the `ObjectQuery` service to retrieve object coordinates
-- load a 3D-to-2D alignment YAML file and convert semantic-map coordinates into the 2D navigation frame
-- optionally display queried targets on a 2D map through an OpenCV visualizer
-- send navigation goals through the custom `Navigate` action
-- send manipulation goals through the `GraspPlace` action
-- publish task status and cancellation signals
+1. A frontend node such as `nl_command_node.py` publishes a human sentence on `/manual_command`.
+2. `decision_maker_node.py` matches the sentence against `SCENARIO_REGISTRY`, expands it into primitive steps, and stores the resulting batch in an internal queue.
+3. The executor thread consumes those steps one by one and forwards them to `/object_query`, `/Navigate_to_pose`, and `/task_command`.
 
-### `scenario_library.py`
+The package therefore separates:
 
-This file provides reusable scenario templates. Rather than hard-coding one command path, it converts human-readable intent into primitive strings such as:
+- command intake
+- symbolic scenario expansion
+- world lookup
+- frame conversion
+- low-level action dispatch
 
-- `goto:x,y,theta`
-- `grasp:object_name`
-- `place:target_name`
+That separation is important because it allows the planner logic in `scenario_library.py` and `nl_planner.py` to remain simple string-based code while `decision_maker_node.py` handles ROS integration, timeouts, visualization, and cancellation.
 
-Examples include:
+### `nl_command_node.py`
 
-- `go_to_target`
-- `give_item`
-- `park_robot`
-- `clean_table`
-- `fetch_drink`
-- `go_from`
-- `test_arm`
+`nl_command_node.py` is the simplest user-facing entry point in the workspace. It implements a lightweight ROS 2 node named `nl_command_node` whose only job is to bridge terminal text input into the command pipeline.
 
-This design separates command semantics from execution mechanics.
+Its implementation is intentionally minimal:
+
+- it publishes `std_msgs/String` to `/manual_command`
+- it subscribes to `/task_status`
+- it creates a timer running every `0.1` seconds
+- the timer uses `select.select()` on `sys.stdin` to perform non-blocking terminal polling
+
+This design avoids a blocking `input()` call. Because stdin is polled inside a timer callback, the node can continue receiving and printing task feedback while the user is idle at the terminal.
+
+Operationally, the file provides three behaviors:
+
+- `send_command()` strips user text, publishes it, and logs the outgoing command
+- `on_feedback()` classifies incoming status strings by prefix such as `done`, `failed`, and `cancel`
+- `_poll_stdin()` checks whether a full terminal line is available and forwards it immediately
+
+The node runs under a `MultiThreadedExecutor`, which is more than sufficient for this small workload and keeps the implementation consistent with the other multi-callback nodes in the repository. In the full system, this file is best understood as a console UI for the `decision_maker` package rather than as a planner or executor itself.
 
 ### `nl_planner.py`
 
-`nl_planner.py` bridges semantic queries and static place definitions:
+`nl_planner.py` contains a small but important utility layer centered on the `WorldModel` class. It is not a full natural-language parser. Instead, it acts as the lookup and formatting helper used by scenario functions.
 
-- static places such as `me` and `home` are resolved locally
-- unknown places are forwarded to the `ObjectQuery` service
-- objects are always resolved through the semantic map service
-- `fmt_goto()` formats pose tuples into the primitive `goto:` command syntax expected by the executor
+`WorldModel` is designed to be reused from an existing ROS node:
+
+- if a node instance is passed into `WorldModel(node=self)`, it reuses that node's logger and ROS client context
+- otherwise it creates a standalone node named `world_model_node`
+- it always creates a client for `object_query_interfaces/ObjectQuery`
+
+The file has two major responsibilities.
+
+First, it resolves object names:
+
+- `resolve_object(name)` normalizes the name to lowercase
+- waits up to `3` seconds for `/object_query` to become available
+- sends an asynchronous service request
+- manually waits on the future with a timeout loop
+- returns either `(x, y, z)` or `None`
+
+This means all higher-level scenario code can treat semantic lookup as a normal Python function call.
+
+Second, it resolves place names:
+
+- `resolve_place(name)` first checks a hard-coded dictionary for symbolic places such as `me`, `home`, and `kitchen`
+- if the place is not in the static table, it forwards the name to `resolve_object()`
+- if that also fails, it falls back to `(0.0, 0.0, 0.0)` and logs a warning
+
+That fallback is a notable design choice: scenario code calling `resolve_place()` will usually receive some coordinate tuple even for an unknown destination, which keeps execution moving but may also send the robot toward the origin if the label is unresolved.
+
+The other key utility is `fmt_goto()`:
+
+- it accepts either `(x, y)` or `(x, y, theta)`
+- inserts a default heading of `0.0` when only two values are provided
+- returns the normalized primitive string `goto:x,y,th`
+
+This is the format expected by `decision_maker_node.py` during batch execution.
+
+### `scenario_library.py`
+
+`scenario_library.py` is the symbolic task-expansion layer. It does not talk to ROS directly. Instead, each function receives a `WorldModel` instance plus a command argument string and returns a `List[str]` of primitive actions.
+
+Those primitives use a very small internal language:
+
+- `goto:x,y,theta` for direct coordinate navigation
+- `goto:name` for symbolic navigation that will be resolved later
+- `grasp:item`
+- `place:destination`
+
+The main scenario functions are:
+
+- `go_to_target(model, target)`: resolve a place or object and produce a single navigation step
+- `give_item(model, item, dest="me")`: navigate to an object, grasp it, navigate to the destination, and place it
+- `park_robot(model)`: return to `home`
+- `clean_table(model)`: go to `table`, pick `trash`, and move it to `trash_bin` or `home`
+- `fetch_drink(model)`: go from `fridge` to `me`
+- `test_arm(model)`: emit a pure manipulation sequence for testing
+
+The most implementation-heavy function is `go_from(model, arg)`, which parses commands of the form:
+
+- `bring bottle to table`
+- `bring the bottle on cabinet to table`
+- `bring apple from shelf to me`
+
+Its parsing strategy is deliberately lightweight:
+
+- normalize to lowercase
+- remove a leading `from`
+- split source and destination on `to` or `into`
+- strip articles such as `the`, `a`, and `an`
+- detect prepositions such as `on`, `in`, `at`, `near`, `inside`, `under`, and `next to`
+- if a prepositional phrase exists in the source, navigate to the location phrase rather than directly to the object label
+
+For example, `bring bottle on cabinet to table` becomes a primitive sequence conceptually equivalent to:
+
+- navigate to `cabinet`
+- grasp `bottle`
+- navigate to `table`
+- place at `table`
+
+The registry at the bottom of the file is the bridge into `decision_maker_node.py`:
+
+- `SCENARIO_REGISTRY` maps fixed text prefixes such as `go to`, `bring`, `give me`, and `go home` to Python functions
+- `decision_maker_node.py` performs prefix matching against this registry
+- once a key matches, the remaining text is passed as that scenario's argument string
+
+This file is therefore the policy layer for command meaning, while `decision_maker_node.py` is the runtime layer for execution.
+
+### `decision_maker_node.py`
+
+`decision_maker_node.py` is the package's central runtime component. It is the file that actually binds together command topics, scenario expansion, object-query lookup, map-frame conversion, navigation actions, manipulation actions, queueing, visualization, and cancellation.
+
+The node starts by constructing several long-lived subsystems:
+
+- `self.cmd_queue`: a bounded queue storing parsed command batches
+- `self.world = WorldModel(node=self)`: shared world model for scenario functions
+- `self.map2d_params`: optional 3D-to-2D calibration loaded from `map3d_to_map2d_yaml`
+- `self.visualizer`: optional OpenCV map viewer loaded from `map_yaml`
+- `self.nav_client`: `ActionClient` for `kachaka_interfaces/Navigate` on `/Navigate_to_pose`
+- `self.task_client`: `ActionClient` for `decision_maker_interfaces/TaskCommand` on `/task_command`
+- `self.obj_client`: service client for `/object_query`
+
+The main parameters are:
+
+- `map3d_to_map2d_yaml`: alignment result used to project semantic 3D points into the 2D navigation frame
+- `map_yaml`: occupancy-map style YAML used by the built-in `MapVisualizer`
+- `grasp_approach_dist`: distance threshold that allows navigation to stop early when the next step is a grasp
+
+The file also contains an embedded helper class, `MapVisualizer`, which:
+
+- loads a map image and YAML metadata
+- converts world coordinates to map pixels
+- keeps a thread-safe image buffer
+- runs a dedicated GUI thread for `cv2.imshow()` and `cv2.waitKey()`
+- draws labels and markers for queried objects and navigation targets
+
+The command-handling flow is as follows.
+
+1. `on_text_event()` receives a `String` from `/manual_command`.
+2. The function scans `SCENARIO_REGISTRY` for the first matching prefix.
+3. A background planning thread runs the corresponding scenario function so that blocking object-query calls do not stall the ROS executor.
+4. `enqueue_command()` stores the resulting primitive batch in `self.cmd_queue`.
+5. `command_executor_loop()` continuously dequeues batches and forwards them to `_execute_batch()`.
+
+`_execute_batch()` is the primitive dispatcher. It iterates over action strings and sends them to:
+
+- `_execute_nav()` for `goto:...`
+- `_execute_grasp()` for `grasp:...`
+- `_execute_place()` for `place:...`
+
+The navigation path inside `_execute_nav()` is the most important part of the file.
+
+It supports two forms of `goto`:
+
+- direct coordinates such as `goto:-0.27,1.76,0.00`
+- symbolic labels such as `goto:chair`
+
+For coordinate form, it:
+
+- parses the payload
+- treats the incoming tuple as a semantic-map coordinate
+- applies the loaded 3D-to-2D transform
+- optionally draws the transformed target on the OpenCV map
+- sends the converted goal to the `Navigate` action server
+
+For symbolic form, it:
+
+- calls `_query_object_position()`
+- waits for the semantic service response
+- applies the same transform inside that helper
+- returns a navigation-frame coordinate tuple
+
+During action execution, `_execute_nav()` also monitors `distance_remaining` feedback from the navigation action. If the next primitive is a grasp and the robot gets within `grasp_approach_dist`, the node cancels the remaining navigation path early and immediately proceeds to the grasp step. That shortcut is what allows the system to stop close enough for manipulation instead of insisting on exact pose convergence.
+
+Manipulation is intentionally simpler:
+
+- `_execute_grasp()` converts `grasp:item` into a `TaskCommand` goal like `grasp the apple`
+- `_execute_place()` converts `place:dest` into `place to table`
+- `_send_task_command()` handles goal sending, waiting, feedback logging, timeout, and success checking for both operations
+
+The file also contains explicit cancellation and cleanup behavior:
+
+- `/cancel_command` is listened to by `on_cancel_event()`
+- `_send_cancel()` publishes `cancel` on `/task_status`
+- `destroy_node()` shuts down worker threads and stops the OpenCV visualizer cleanly
+
+At the bottom of the file, `load_map3d_to_map2d()` and `map3d_point_to_map2d_xy()` implement the actual projection math. They load the `plane_fit` and `sim2` blocks from the alignment YAML, project a 3D semantic point onto the fitted plane basis, then apply a 2D similarity transform. This is the exact bridge between the perception map used by `object_query` and the 2D map used by `kachaka_nav`.
 
 <a id="section-42-decision_maker_interfaces"></a>
 
@@ -318,36 +482,94 @@ This package connects to the Kachaka robot API and republishes robot LiDAR data 
 
 ### Purpose
 
-`kachaka_nav` provides navigation action servers, path planning libraries, robot drivers, coordinate conversion helpers, and several map visualization and calibration utilities.
+`kachaka_nav` is the motion-execution package. It exposes the custom `Navigate` action, translates user-frame goals into the robot's native frame, talks to either the real Kachaka hardware or a simulator driver, and continuously republishes the robot pose and path for the rest of the system.
 
 ### Main Runtime Files
 
 | File | Role |
 |---|---|
-| `kachaka_nav/modular_nav.py` | Additional navigation server implementations |
+| `kachaka_nav/modular_nav.py` | Main lightweight navigation action server used by the integrated pipeline |
 | `kachaka_nav/robot_driver.py` | Driver abstraction for real Kachaka hardware and ROS simulation |
 
 ### Navigation Architecture
 
-The package is architected around two key abstractions:
+The package is built around two layers:
 
-1. `Navigate.action` as the motion contract.
-2. `robot_driver.py` as the backend abstraction.
+1. `Navigate.action` as the control contract seen by upstream packages.
+2. `robot_driver.py` as the concrete backend for either real hardware or simulation.
 
-`robot_driver.py` provides:
+`robot_driver.py` provides two interchangeable implementations:
 
-- `KachakaRealDriver` for direct hardware access through the Kachaka API
-- `RosSimDriver` for simulator-oriented velocity output on `/cmd_vel`
+- `KachakaRealDriver` for direct communication with the physical Kachaka platform
+- `RosSimDriver` for simulation-oriented control through ROS topics
 
-`nav_node.py` demonstrates the intended navigation flow:
+`modular_nav.py` is the runtime bridge between those drivers and the rest of the workspace.
 
-- obtain the current pose from the active driver
-- plan a route using RRT
-- iterate through waypoints
-- compute linear and angular velocity commands
-- stop or cancel cleanly when required
+### `modular_nav.py`
 
-This package is the motion execution backbone of the workspace.
+`modular_nav.py` implements `ModularNavNode`, a ROS 2 node that acts as a navigation action server and a pose-republishing bridge at the same time.
+
+Its startup logic is structured around four concerns.
+
+First, it declares configuration parameters:
+
+- `use_sim`: select the simulator driver or the real robot driver
+- `kachaka_ip`: network endpoint for the real robot
+- `user_map_yaml`: optional YAML file whose `origin` field defines the offset and yaw between the user map and the Kachaka-native map
+- `goal_xy_tolerance`: planar tolerance used to decide when a goal is considered reached
+
+Second, it configures callback concurrency:
+
+- a `MutuallyExclusiveCallbackGroup` is used for timer-driven pose publishing
+- a `ReentrantCallbackGroup` is used for the `Navigate` action server
+- the node runs under a `MultiThreadedExecutor`
+
+This prevents the pose-publication loop and the action-execution loop from blocking each other.
+
+Third, it creates the runtime publishers and TF output:
+
+- `/user_pose` publishes the pose transformed into the user-defined map frame
+- `/kachaka_pose` publishes the robot pose in the Kachaka-native `map` frame
+- `/robot_path` appends the motion trajectory as a `nav_msgs/Path`
+- a TF transform from `map` to `base_link` is broadcast continuously
+
+Fourth, it selects the navigation backend:
+
+- `RosSimDriver(self)` when `use_sim` is true
+- `KachakaRealDriver(robot_ip)` otherwise
+
+The frame-conversion logic is explicit and local to this file:
+
+- `load_map_alignment()` reads the `origin` field from a YAML file
+- `transform_user_to_kachaka()` rotates and translates a goal from the user map into the robot's native map
+- `transform_kachaka_to_user()` performs the inverse conversion for published pose output
+
+The periodic pose path in `publish_pose_callback()` does the following every `0.1` seconds:
+
+- queries the current pose from the active driver
+- converts yaw into a quaternion
+- publishes a `PoseStamped` in the native `map` frame
+- broadcasts the matching TF transform
+- appends that pose to the path history, capped at `8000` samples
+- converts the same pose into `user_map` coordinates and publishes it on `/user_pose`
+
+The action server is implemented in `execute_callback()`. When a `Navigate` goal arrives:
+
+- it interprets the request as a goal in the user frame
+- converts it into native Kachaka coordinates
+- calls `driver.move_native()` in non-blocking mode when possible
+- repeatedly polls the robot pose
+- computes Euclidean distance to the goal
+- publishes `distance_remaining` feedback
+- stops navigation successfully once the goal is within `goal_xy_tolerance`
+
+The callback also contains explicit timeout and cancellation behavior:
+
+- if execution exceeds `60` seconds, it tries `cancel_current_command()` and `stop()`
+- when the goal is close enough, it also cancels/stops the robot's internal motion to avoid overshooting
+- it returns a `Navigate.Result(success=...)` and marks the goal as succeeded or aborted accordingly
+
+In the integrated system, this file is the execution endpoint that receives 2D targets from `decision_maker_node.py` after semantic lookup and map alignment have already been completed.
 
 <a id="section-47-map_alignment"></a>
 
@@ -399,33 +621,109 @@ It supports calibration dataset generation rather than online navigation directl
 
 ### Purpose
 
-`object_query` exposes semantic map contents as a ROS 2 query service. It is the perception-facing semantic memory of the system.
+`object_query` is the semantic-memory package of the workspace. It loads offline semantic-map assets, organizes them into a searchable in-memory database, serves object-location queries through ROS 2, and publishes visualization outputs that make those semantic results visible in RViz.
 
 ### Main Files
 
 | File | Role |
 |---|---|
-| `object_query/object_query_server.py` | Primary semantic object query service |
+| `object_query/object_query_server.py` | Main semantic object query server and map-visualization publisher |
 | `object_query/object_query_client.py` | Simple service client |
 | `object_query/object_query_test.py` | Expanded test or experimental server variant |
 
 ### Core Behavior
 
-The main server:
+The package's central implementation is `object_query_server.py`.
 
-- loads semantic NPZ map data and associated metadata JSON
-- optionally auto-aligns the semantic map by estimating a floor-normal rotation
-- loads a separate 3D point cloud for visualization
-- builds an in-memory database from category names to one or more object centroids
-- provides the `object_query` service
-- publishes object listings, queried markers, and the 3D map point cloud
+### `object_query_server.py`
 
-The query logic:
+`object_query_server.py` defines `ObjectQueryServer`, a ROS 2 node that combines three responsibilities:
 
-- receives an object name
-- searches the category-to-centroid database
-- returns the nearest matching instance
-- publishes RViz markers for the queried object only
+- loading semantic and geometric map data from disk
+- answering semantic lookup requests through `/object_query`
+- publishing RViz-friendly point clouds and markers
+
+The file begins by declaring several map-related parameters:
+
+- `3dmap_path`: dense 3D scene point cloud
+- `map_path`: semantic NPZ map containing points and semantic IDs
+- `semantic_path`: JSON metadata describing segment IDs and class names
+- `instance_path`: optional instance-level JSON with centroids per object instance
+- `auto_align`: optional flag to rotate the semantic map so floor-like classes align with the XY plane
+
+At startup the node creates:
+
+- a service server on `/object_query`
+- a publisher on `/object_list`
+- a `MarkerArray` publisher on `/semantic_map_markers`
+- a `PointCloud2` publisher on `/map_pointcloud`
+
+It also initializes an in-memory database:
+
+- `self.object_db` is a `defaultdict(list)`
+- each key is a lowercased semantic label such as `chair` or `bottle`
+- each value is a list of 3D centroids
+
+The loading path has two modes.
+
+1. Preferred path: `load_instance_map()`
+
+If `instance_path` exists, the server reads instance-level annotations from JSON:
+
+- it expects an `instances` dictionary
+- each instance contributes `semantic_name` and `centroid`
+- centroids are grouped by semantic class name into `object_db`
+- the dense 3D map is loaded separately for visualization
+
+This mode gives the system direct object-instance centroids instead of deriving them from broad semantic segments.
+
+2. Fallback path: `load_semantic_map()`
+
+If no instance-level file exists, the server reconstructs the database from the semantic map itself:
+
+- loads semantic points from either `pts` or `means3D`
+- loads semantic IDs from either `pan` or `semantic_ids`
+- loads the separate dense 3D map and optional colors
+- parses semantic metadata from JSON fields such as `segments_info`, `segmentation`, or `segments`
+- builds an `id_to_name` mapping from segment ID to category name
+- optionally computes a global alignment rotation using floor-like classes
+- builds one centroid per semantic segment by averaging its bounding-box minimum and maximum corners
+
+The alignment routine in `compute_alignment_matrix()` is also worth noting:
+
+- it searches for floor-related labels such as `floor`, `ground`, `carpet`, `tile`, and `wood`
+- extracts the corresponding points
+- fits a dominant plane using SVD
+- computes the rotation needed to align the estimated floor normal with the Z axis
+- applies the same rotation to both the semantic map and the dense 3D point cloud
+
+Once the data is loaded, the server immediately:
+
+- publishes the serialized object database on `/object_list`
+- publishes the dense 3D map as `PointCloud2`
+- starts a timer that republishes the point cloud every second
+
+The query path is implemented by `handle_query()`:
+
+- normalize the request name to lowercase
+- call `search_object()`
+- return `found`, `position`, and a human-readable message
+- if successful, clear old markers and publish markers for the requested class only
+- if unsuccessful, clear all markers
+
+The visualization behavior is intentionally query-scoped. Rather than publishing the full semantic map as labels all the time, `publish_object_marker()` displays only the currently queried object class:
+
+- a green sphere marker for each instance
+- a text marker above each sphere
+- `Marker.DELETEALL` before every new query so the view stays uncluttered
+
+`publish_point_cloud()` builds a raw `sensor_msgs/PointCloud2` message manually:
+
+- uses the loaded 3D map points
+- packs RGB values into a float field
+- publishes the data in the `map` frame
+
+From the perspective of the overall system, this node is the source of truth for semantic object positions. `decision_maker/nl_planner.py` and `decision_maker/decision_maker_node.py` both rely on this service to convert a label like `chair` into a concrete 3D location before navigation and manipulation can proceed.
 
 <a id="section-49-object_query_interfaces"></a>
 
@@ -582,7 +880,7 @@ This section adds an operator-oriented guide for building the environment and la
 
 The instructions in this section assume:
 
-- project root: `/robotic_system_`
+- project root: `/robotic_system`
 - ROS 2 workspace root: `/robotic_system/robot_ws`
 - ROS distribution: `humble`
 - Conda environment name: `robot_ros`
@@ -833,4 +1131,3 @@ ros2 run decision_maker nl_command_node
 ```
 
 At this point, type commands such as `go to chair` or `bring bottle to table` in the `nl_command_node` terminal.
-
