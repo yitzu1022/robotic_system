@@ -77,9 +77,9 @@ def go_from(model: WorldModel, arg: str) -> List[str]:
 
     Examples:
       "bring the bottle on cabinet to table"
-        => goto:cabinet, grasp:bottle, goto:table, place:table
+        => goto:cabinet, grasp:bottle, goto:table, place:obj
       "bring bottle to table"
-        => goto:bottle,  grasp:bottle, goto:table, place:table
+        => goto:bottle,  grasp:bottle, goto:table, place:obj
     """
     s = arg.strip().lower()
     # remove leading "from"
@@ -112,7 +112,7 @@ def go_from(model: WorldModel, arg: str) -> List[str]:
         obj = src.strip()
         nav_target = obj                              # navigate to the object itself
 
-    return [f"goto:{nav_target}", f"grasp:{obj}", f"goto:{dest}", f"place:{dest}"]
+    return [f"goto:{nav_target}", f"grasp:{obj}", f"goto:{dest}", f"place:{obj}"]
 
 def test_arm(model: WorldModel) -> List[str]:
     """Scenario to test grasp and place actions."""

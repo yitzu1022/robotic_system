@@ -555,7 +555,7 @@ class DecisionMakingNode(Node):
 
     def _execute_place(self, cmd: str) -> bool:
         dest = cmd.split(':', 1)[1].strip()
-        return self._send_task_command(f'place to {dest}', 'PLACE', timeout_sec=300.0)
+        return self._send_task_command(f'handover {dest}', 'HANDOVER', timeout_sec=300.0)
 
     # =============================================================
     # FEEDBACK / CANCEL / UTILITIES
