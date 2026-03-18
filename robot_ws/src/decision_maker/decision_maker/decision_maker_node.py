@@ -513,7 +513,7 @@ class DecisionMakingNode(Node):
             fut = self.task_client.send_goal_async(goal, feedback_callback=self._on_task_feedback)
             start = time.time()
             while not fut.done():
-                if time.time() - start > 10.0:
+                if time.time() - start > 30.0:
                     self.get_logger().error(f"⏰ {label} goal send timeout")
                     return False
                 time.sleep(0.05)
@@ -550,7 +550,7 @@ class DecisionMakingNode(Node):
         # if not pos:
         #    self.get_logger().warn(f"⚠️ Skipping grasp — position unavailable for '{obj}'.")
         #    return False
-
+        time.sleep(5.0)
         return self._send_task_command(f'grasp the {obj}', 'GRASP', timeout_sec=300.0)
 
     def _execute_place(self, cmd: str) -> bool:

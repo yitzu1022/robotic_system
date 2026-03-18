@@ -29,7 +29,7 @@ class ModularNavNode(Node):
         self.declare_parameter('kachaka_ip', '192.168.0.157:26400')
         self.declare_parameter('user_map_yaml', '')
         # distance tolerance (meters) to consider goal reached
-        self.declare_parameter('goal_xy_tolerance', 0.5)
+        self.declare_parameter('goal_xy_tolerance', 0.6)
 
         self.use_sim = self.get_parameter('use_sim').value
         robot_ip = self.get_parameter('kachaka_ip').value
