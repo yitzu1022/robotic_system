@@ -423,7 +423,7 @@ The query logic:
 
 - receives an object name
 - searches the category-to-centroid database
-- returns the nearest matching instance
+- returns the all matching instances then waits for the user to select one if multiple are found 
 - publishes RViz markers for the queried object only
 
 <a id="section-49-object_query_interfaces"></a>
@@ -793,6 +793,10 @@ ros2 run object_query object_query_server --ros-args \
   -p semantic_path:=/robotic-project/robot_ws/data/Util/Final_SEM_GS_converted_meta.json
 ```
 
+After the object query server receive the searching request, it will search for the corresponding instance in the semantic map.
+
+When there is many semantic instances in the map, user should choose which instance to navigate to, grasp, or place on by looking at the RViz visualization of the semantic map and queried markers.
+
 #### Terminal 2: Navigation Server
 
 ```bash
@@ -831,5 +835,5 @@ source install/setup.bash
 ros2 run decision_maker nl_command_node
 ```
 
-At this point, type commands such as `go to chair` or `bring bottle to table` in the `nl_command_node` terminal.
+At this point, type commands such as `go to chair` or `bring bottle on cabinet to table` in the `nl_command_node` terminal.
 

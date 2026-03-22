@@ -9,7 +9,7 @@
 - [3. Environment and Dependency Configuration](#section-3-environment-and-dependency-configuration)
 - [4. Package Descriptions](#section-4-package-by-package-technical-analysis)
 - [4.1 `decision_maker`](#section-41-decision_maker)
-- [4.2 `decision_maker_interfaces`](#section-42-decision_maker_interfaces)
+- [4.2 `mm_interface`](#section-42-mm_interface)
 - [4.3 `get_pose`](#section-43-get_pose)
 - [4.4 `kachaka_interfaces`](#section-44-kachaka_interfaces)
 - [4.5 `kachaka_laser_api`](#section-45-kachaka_laser_api)
@@ -17,8 +17,6 @@
 - [4.7 `map_alignment`](#section-47-map_alignment)
 - [4.8 `object_query`](#section-48-object_query)
 - [4.9 `object_query_interfaces`](#section-49-object_query_interfaces)
-- [4.8 `semantic_slam`](#section-48-semantic_slam)
-- [4.8 `semantic_slam_interfaces`](#section-48-semantic_slam_interfaces)
 - [5. Custom ROS Interfaces Summary](#section-5-custom-ros-interfaces-summary)
 - [6. Data Assets and Utility Scripts](#section-6-data-assets-and-utility-scripts)
 - [6.1 `data/Util`](#section-61-datautil)
@@ -69,7 +67,7 @@ The `src/` directory contains the following ROS 2 packages:
 | Package | Type | Purpose |
 |---|---|---|
 | `decision_maker` | `ament_python` | High-level task orchestration, command ingestion, and action dispatch |
-| `decision_maker_interfaces` | `ament_cmake` | Custom task, grasp, and place action definitions |
+| `mm_interface` | `ament_cmake` | Custom task, grasp, and place action definitions |
 | `get_pose` | `ament_python` | TF-to-`PoseStamped` conversion utility |
 | `kachaka_interfaces` | `ament_cmake` | Custom navigation action definition |
 | `kachaka_laser_api` | `ament_python` | LiDAR acquisition from the Kachaka API and scan conversion |
@@ -326,7 +324,7 @@ The node starts by constructing several long-lived subsystems:
 - `self.map2d_params`: optional 3D-to-2D calibration loaded from `map3d_to_map2d_yaml`
 - `self.visualizer`: optional OpenCV map viewer loaded from `map_yaml`
 - `self.nav_client`: `ActionClient` for `kachaka_interfaces/Navigate` on `/Navigate_to_pose`
-- `self.task_client`: `ActionClient` for `decision_maker_interfaces/TaskCommand` on `/task_command`
+- `self.task_client`: `ActionClient` for `TaskCommand` on `/task_command`
 - `self.obj_client`: service client for `/object_query`
 
 The main parameters are:
@@ -342,6 +340,8 @@ The file also contains an embedded helper class, `MapVisualizer`, which:
 - keeps a thread-safe image buffer
 - runs a dedicated GUI thread for `cv2.imshow()` and `cv2.waitKey()`
 - draws labels and markers for queried objects and navigation targets
+
+The decision maker imports `TaskCommand` from `mm_interface.action` to send manipulation requests to grasp and place server. The interface is provided by the grasp and place part.
 
 The command-handling flow is as follows.
 
@@ -381,10 +381,10 @@ For symbolic form, it:
 
 During action execution, `_execute_nav()` also monitors `distance_remaining` feedback from the navigation action. If the next primitive is a grasp and the robot gets within `grasp_approach_dist`, the node cancels the remaining navigation path early and immediately proceeds to the grasp step. That shortcut is what allows the system to stop close enough for manipulation instead of insisting on exact pose convergence.
 
-Manipulation is intentionally simpler:
+Manipulation is intentionally simpler but the latest code now behaves more like a grasp-plus-handover dispatcher than a generic place executor:
 
-- `_execute_grasp()` converts `grasp:item` into a `TaskCommand` goal like `grasp the apple`
-- `_execute_place()` converts `place:dest` into `place to table`
+- `_execute_grasp()` waits `5` seconds, then converts `grasp:item` into a `TaskCommand` goal like `grasp the apple`
+- `_execute_place()` converts `place:dest` into a handover-style command string: `handover <dest>` since the grasp and place server currently only supports handover behavior
 - `_send_task_command()` handles goal sending, waiting, feedback logging, timeout, and success checking for both operations
 
 The file also contains explicit cancellation and cleanup behavior:
@@ -395,13 +395,13 @@ The file also contains explicit cancellation and cleanup behavior:
 
 At the bottom of the file, `load_map3d_to_map2d()` and `map3d_point_to_map2d_xy()` implement the actual projection math. They load the `plane_fit` and `sim2` blocks from the alignment YAML, project a 3D semantic point onto the fitted plane basis, then apply a 2D similarity transform. This is the exact bridge between the perception map used by `object_query` and the 2D map used by `kachaka_nav`.
 
-<a id="section-42-decision_maker_interfaces"></a>
+<a id="section-42-mm_interface"></a>
 
-## 4.2 `decision_maker_interfaces`
+## 4.2 `mm_interface`
 
 ### Purpose
 
-This package defines custom ROS 2 actions used for manipulation and task dispatch.
+`mm_interface` is a ROS 2 interface-only package. Its role is to define the action contract that the decision-making layer can use when sending textual manipulation or task commands to another server.
 
 ### Interface Files
 
@@ -409,7 +409,15 @@ This package defines custom ROS 2 actions used for manipulation and task dispatc
 |---|---|
 | `action/TaskCommand.action` | Generic text task action |
 
-The action provides the type contracts required by nodes in `decision_maker`.
+### `TaskCommand.action`
+
+The action definition is intentionally minimal:
+
+- Goal: `string command`
+- Result: `bool success`, `string message`
+- Feedback: `string feedback`
+
+This design makes the action suitable as a generic bridge between symbolic task planning and an external manipulation or behavior-execution module. The planner side does not need to know whether the downstream server is controlling a gripper, an arm, a handover behavior, or a scripted skill. It only needs to send a textual instruction and wait for structured success or failure.
 
 <a id="section-43-get_pose"></a>
 
@@ -516,7 +524,7 @@ First, it declares configuration parameters:
 - `use_sim`: select the simulator driver or the real robot driver
 - `kachaka_ip`: network endpoint for the real robot
 - `user_map_yaml`: optional YAML file whose `origin` field defines the offset and yaw between the user map and the Kachaka-native map
-- `goal_xy_tolerance`: planar tolerance used to decide when a goal is considered reached
+- `goal_xy_tolerance`: planar tolerance used to decide when a goal is considered reached, defaulting to `0.6` meters in the latest file
 
 Second, it configures callback concurrency:
 
@@ -569,7 +577,14 @@ The callback also contains explicit timeout and cancellation behavior:
 - when the goal is close enough, it also cancels/stops the robot's internal motion to avoid overshooting
 - it returns a `Navigate.Result(success=...)` and marks the goal as succeeded or aborted accordingly
 
-In the integrated system, this file is the execution endpoint that receives 2D targets from `decision_maker_node.py` after semantic lookup and map alignment have already been completed.
+This node assumes upstream code already solved the semantic-navigation problem. `modular_nav.py` does not perform object lookup, semantic reasoning, or 3D-to-2D projection itself. It expects `decision_maker_node.py` to hand it a final 2D goal in the user map frame, then focuses purely on:
+
+- frame conversion between user map and Kachaka map
+- motion execution through the selected driver
+- progress feedback through `distance_remaining`
+- pose and path publication for monitoring
+
+In the integrated system, this file is therefore the execution endpoint that receives 2D targets from `decision_maker_node.py` after semantic lookup and map alignment have already been completed.
 
 <a id="section-47-map_alignment"></a>
 
@@ -741,9 +756,6 @@ This package defines the semantic lookup service contract.
 
 This service is the main interface between symbolic task commands and semantic map perception.
 
-<a id="section-48-semantic_slam"></a>
-
-
 <a id="section-5-custom-ros-interfaces-summary"></a>
 
 ## 5. Custom ROS Interfaces Summary
@@ -754,11 +766,7 @@ The workspace defines several custom interfaces that form the contract between p
 |---|---|---|
 | `kachaka_interfaces` | `Navigate.action` | Motion request to a target coordinate |
 | `object_query_interfaces` | `ObjectQuery.srv` | Semantic lookup by object name |
-| `decision_maker_interfaces` | `TaskCommand.action` | Generic task submission |
-| `decision_maker_interfaces` | `GraspPlace.action` | Combined manipulation request |
-| `semantic_slam_interfaces` | `RunSlam.action` | Semantic SLAM lifecycle request |
-
-These interfaces are important because they decouple the packages cleanly. The orchestration logic does not need to know the internal implementation details of navigation, perception, or SLAM servers as long as these contracts are respected.
+| `mm_interface` | `TaskCommand.action` | Generic task submission |
 
 <a id="section-6-data-assets-and-utility-scripts"></a>
 
