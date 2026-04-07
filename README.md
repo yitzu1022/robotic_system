@@ -983,7 +983,7 @@ source /opt/ros/humble/setup.bash
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate robot_ros
 source install/setup.bash
-export PYTHONPATH=$PYTHONPATH:/opt/conda/envs/robot_ros/lib/python3.8/site-packages
+export PYTHONPATH=$PYTHONPATH:/opt/conda/envs/robot_ros/lib/python3.10/site-packages
 ```
 
 If the environment is local rather than container-based, replace `/opt/conda/envs/robot_ros/...` with the local Conda environment path shown by `conda info --envs`.
