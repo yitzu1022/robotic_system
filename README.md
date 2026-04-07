@@ -29,7 +29,7 @@
 
 ## 1. Executive Summary
 
-This repository is a ROS 2 workspace that integrates command interpretation, semantic object lookup, mobile navigation, map alignment, pose extraction, LiDAR acquisition, and a prototype semantic SLAM service. The workspace is organized around Python-based ROS 2 application packages and several interface packages that define custom actions and services. In addition to runtime code, the repository includes precomputed semantic map data, alignment assets, generated build outputs, and utility scripts for converting and validating map representations.
+This repository is a ROS2 workspace that integrates command interpretation, semantic object lookup, mobile navigation, map alignment, pose extraction, LiDAR acquisition, and a prototype semantic SLAM service. The workspace is organized around Python-based ROS2 application packages and several interface packages that define custom actions and services. In addition to runtime code, the repository includes precomputed semantic map data, alignment assets, generated build outputs, and utility scripts for converting and validating map representations.
 
 From a system perspective, the workspace implements a perception-to-action pipeline:
 
@@ -47,11 +47,11 @@ The workspace therefore functions as a multi-package robotics application focuse
 
 ## 2. Repository Structure
 
-The top-level directory contains both source code and ROS 2 build artifacts:
+The top-level directory contains both source code and ROS2 build artifacts:
 
 ```text
 robot_ws/
-├── src/                # ROS 2 source packages
+├── src/                # ROS2 source packages
 ├── data/               # Semantic maps, alignment files, utilities, and lab assets
 ├── build/              # Colcon build outputs
 ├── install/            # Installed package outputs
@@ -62,7 +62,7 @@ robot_ws/
 
 ### 2.1 Source Packages
 
-The `src/` directory contains the following ROS 2 packages:
+The `src/` directory contains the following ROS2 packages:
 
 | Package | Type | Purpose |
 |---|---|---|
@@ -83,7 +83,7 @@ The `src/` directory contains the following ROS 2 packages:
 | Directory | Role |
 |---|---|
 | `build/` | Package-specific intermediate build outputs created by `colcon build` |
-| `install/` | Generated runtime installation tree for ROS 2 packages |
+| `install/` | Generated runtime installation tree for ROS2 packages |
 | `log/` | Build and packaging logs from multiple historical `colcon` executions |
 | `data/Util/` | Map conversion scripts, alignment YAML files, semantic metadata, and NPZ assets |
 | `data/lab/` | Environment-specific lab maps, semantic point clouds, and map verification scripts |
@@ -98,7 +98,7 @@ The `build/`, `install/`, and `log/` directories are generated artifacts rather 
 
 `requirement.txt` is a large environment rather than a minimal hand-curated dependency list. It includes:
 
-- ROS 2 Python packages and ament tooling
+- ROS2 Python packages and ament tooling
 - Scientific computing libraries such as `numpy`, `scipy`, and `matplotlib`
 - Computer vision and visualization dependencies
 - Speech-related packages
@@ -127,7 +127,7 @@ The Dockerfile:
 - installs Miniconda under `/opt/conda`
 - creates the `robot_ros` Conda environment
 - installs Python dependencies and Kachaka API support
-- builds the ROS 2 workspace with `colcon`
+- builds the ROS2 workspace with `colcon`
 
 The entrypoint script:
 
@@ -206,7 +206,7 @@ That separation is important because it allows the planner logic in `scenario_li
 
 ### `nl_command_node.py`
 
-`nl_command_node.py` is the simplest user-facing entry point in the workspace. It implements a lightweight ROS 2 node named `nl_command_node` whose only job is to bridge terminal text input into the command pipeline.
+`nl_command_node.py` is the simplest user-facing entry point in the workspace. It implements a lightweight ROS2 node named `nl_command_node` whose only job is to bridge terminal text input into the command pipeline.
 
 Its implementation is intentionally minimal:
 
@@ -401,7 +401,7 @@ At the bottom of the file, `load_map3d_to_map2d()` and `map3d_point_to_map2d_xy(
 
 ### Purpose
 
-`mm_interface` is a ROS 2 interface-only package. Its role is to define the action contract that the decision-making layer can use when sending textual manipulation or task commands to another server.
+`mm_interface` is a ROS2 interface-only package. Its role is to define the action contract that the decision-making layer can use when sending textual manipulation or task commands to another server.
 
 ### Interface Files
 
@@ -466,7 +466,7 @@ The `Navigate` action is the primary motion interface used by `decision_maker` a
 
 ### Purpose
 
-This package connects to the Kachaka robot API and republishes robot LiDAR data into ROS 2.
+This package connects to the Kachaka robot API and republishes robot LiDAR data into ROS2.
 
 ### Main Files
 
@@ -515,7 +515,7 @@ The package is built around two layers:
 
 ### `modular_nav.py`
 
-`modular_nav.py` implements `ModularNavNode`, a ROS 2 node that acts as a navigation action server and a pose-republishing bridge at the same time.
+`modular_nav.py` implements `ModularNavNode`, a ROS2 node that acts as a navigation action server and a pose-republishing bridge at the same time.
 
 Its startup logic is structured around four concerns.
 
@@ -636,7 +636,7 @@ It supports calibration dataset generation rather than online navigation directl
 
 ### Purpose
 
-`object_query` is the semantic-memory package of the workspace. It loads offline semantic-map assets, organizes them into a searchable in-memory database, serves object-location queries through ROS 2, and publishes visualization outputs that make those semantic results visible in RViz.
+`object_query` is the semantic-memory package of the workspace. It loads offline semantic-map assets, organizes them into a searchable in-memory database, serves object-location queries through ROS2, and publishes visualization outputs that make those semantic results visible in RViz.
 
 ### Main Files
 
@@ -652,7 +652,7 @@ The package's central implementation is `object_query_server.py`.
 
 ### `object_query_server.py`
 
-`object_query_server.py` defines `ObjectQueryServer`, a ROS 2 node that combines three responsibilities:
+`object_query_server.py` defines `ObjectQueryServer`, a ROS2 node that combines three responsibilities:
 
 - loading semantic and geometric map data from disk
 - answering semantic lookup requests through `/object_query`
@@ -876,7 +876,7 @@ The intended integrated workflow is as follows:
 - `get_pose` can republish TF as `PoseStamped`.
 - `kachaka_laser_api` publishes `LaserScan` for sensing and debugging.
 
-This interaction pattern confirms that the workspace is not a collection of isolated experiments; it is an integrated semantic-task robotics stack centered on ROS 2 message passing and action/service composition.
+This interaction pattern confirms that the workspace is not a collection of isolated experiments; it is an integrated semantic-task robotics stack centered on ROS2 message passing and action/service composition.
 
 <a id="section-8-practical-setup-and-execution-guide"></a>
 
@@ -889,7 +889,7 @@ This section adds an operator-oriented guide for building the environment and la
 The instructions in this section assume:
 
 - project root: `/robotic_system`
-- ROS 2 workspace root: `/robotic_system/robot_ws`
+- ROS2 workspace root: `/robotic_system/robot_ws`
 - ROS distribution: `humble`
 - Conda environment name: `robot_ros`
 

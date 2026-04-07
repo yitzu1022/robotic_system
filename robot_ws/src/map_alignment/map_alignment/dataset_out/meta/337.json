@@ -1,0 +1,110 @@
+{
+  "idx": 337,
+  "ts_system_pose_then_image": 1774840707.0523849,
+  "pose": {
+    "world_frame": "map",
+    "base_frame": "base_footprint",
+    "stamp_ros": {
+      "sec": 1774840706,
+      "nanosec": 942906141
+    },
+    "translation": {
+      "x": 5.021060989318684,
+      "y": 1.477463760649548,
+      "z": 0.0
+    },
+    "rotation_xyzw": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.8517150387366016,
+      "w": 0.5240052411855339
+    },
+    "yaw_rad": 2.038499163631166
+  },
+  "realsense_meta": {
+    "ts_system": 1774840706.9870286,
+    "depth_scale": 0.0010000000474974513,
+    "color_profile": {
+      "w": 640,
+      "h": 480,
+      "fps": 15
+    },
+    "depth_ir_profile": {
+      "w": 640,
+      "h": 480,
+      "fps": 15
+    }
+  },
+  "realsense_intr_extr": {
+    "depth_intr": {
+      "width": 640,
+      "height": 480,
+      "fx": 386.7013244628906,
+      "fy": 386.7013244628906,
+      "ppx": 322.88580322265625,
+      "ppy": 240.861083984375,
+      "model": 4,
+      "coeffs": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "ir_right_intr": {
+      "width": 640,
+      "height": 480,
+      "fx": 386.7013244628906,
+      "fy": 386.7013244628906,
+      "ppx": 322.88580322265625,
+      "ppy": 240.861083984375,
+      "model": 4,
+      "coeffs": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "color_intr": {
+      "width": 640,
+      "height": 480,
+      "fx": 612.6372680664062,
+      "fy": 613.3155517578125,
+      "ppx": 312.4703369140625,
+      "ppy": 235.73280334472656,
+      "model": 2,
+      "coeffs": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "extr_depth_to_ir_right": {
+      "rotation": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "translation": [
+        -0.050073496997356415,
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "notes": {
+    "order": "pose first, then frameset snapshot",
+    "right_depth": "projected into IR-right view"
+  }
+}

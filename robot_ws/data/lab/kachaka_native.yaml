@@ -3,7 +3,7 @@ image: kachaka_native.png
 negate: 0
 occupied_thresh: 0.65
 origin:
-- -8.83139
-- -4.27059
+- -0.82619
+- -2.87325
 - 0.0
 resolution: 0.02500000037252903
