@@ -56,8 +56,13 @@ def ply_to_npz(ply_file_path, npz_file_path):
 # --- Example Usage ---
 # Replace 'input.ply' with the path to your actual PLY file
 # Replace 'output.npz' with your desired output path
-input_ply = '/home/weichen/robotic-project/robot_ws/data/lab/semantic_pcd_accumulated_gaussians.ply'
-output_npz = '/home/weichen/robotic-project/robot_ws/data/lab/semantic_pcd_accumulated_gaussians.npz'
+# input_ply = '/home/weichen/robotic-project/robot_ws/data/lab/accumulated_gaussians_semantic_color_with_instance.ply'
+# output_npz = '/home/weichen/robotic-project/robot_ws/data/lab/accumulated_gaussians_semantic_color_with_instance.npz'
+# input_ply = '/home/weichen/robotic-project/robot_ws/data/lab/semantic_pcd_accumulated_gaussians.ply'
+# output_npz = '/home/weichen/robotic-project/robot_ws/data/lab/semantic_pcd_accumulated_gaussians.npz'
+
+input_ply = '/home/weichen/robotic-project/robot_ws/data/lab/accumulated_gaussians.ply'
+output_npz = '/home/weichen/robotic-project/robot_ws/data/lab/accumulated_gaussians.npz'
 
 # Check if file exists
 if not os.path.exists(input_ply):
