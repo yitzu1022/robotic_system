@@ -1022,7 +1022,8 @@ ros2 run object_query object_query_server
 #### Real Robot Example (Kachaka moving platform)
 
 ```bash
-ros2 run kachaka_nav modular_nav_node
+export PYTHONPATH=$PYTHONPATH:/opt/conda/envs/robot_ros/lib/python3.10/site-packages
+ros2 run kachaka_nav modular_nav_node --ros-args -p kachaka_ip:= {ip address}
 ```
 
 ### 8.5.3 Start `decision_maker` node
