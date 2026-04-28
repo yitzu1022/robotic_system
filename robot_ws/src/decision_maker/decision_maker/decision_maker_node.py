@@ -2,6 +2,7 @@ import threading
 import queue
 import time
 import math
+import json
 from typing import List, Optional
 import yaml
 import numpy as np
@@ -189,6 +190,7 @@ class DecisionMakingNode(Node):
         self.sub_manual = self.create_subscription(String, '/manual_command', self.on_text_event, 10)
         self.cancel_sub = self.create_subscription(String, '/cancel_command', self.on_cancel_event, 10)
         self.status_pub = self.create_publisher(String, '/task_status', 10)
+        self.preview_goal_pub = self.create_publisher(String, '/semantic_preview/current_goal', 10)
 
         # ====== Action clients ======
         self.nav_client = ActionClient(self, Navigate, '/Navigate_to_pose')         #change to similar name but not the same name with nav2's topic
@@ -282,12 +284,16 @@ class DecisionMakingNode(Node):
 
             name, actions = batch["name"], batch["actions"]
             self.get_logger().info(f"🚀 Executing batch: {name}")
+            self._reset_preview_path(reason=f"batch_start:{name}")
+            self._clear_preview_goal(reason=f"batch_start:{name}")
 
             success = self._execute_batch(name, actions)
             if success:
                 self.get_logger().info(f"✅ Finished batch: {name}")
+                self._clear_preview_goal(reason="batch_complete")
             else:
                 self.get_logger().warn(f"❌ Batch '{name}' failed or timed out.")
+                self._clear_preview_goal(reason="batch_failed")
 
             self.cmd_queue.task_done()
 
@@ -327,9 +333,64 @@ class DecisionMakingNode(Node):
             self.get_logger().warn('⚠️ No 3D->2D params loaded, returning raw (x,y)')
             return (x_in, y_in)
         
-        mu, e1, e2, s, R, t = self.map2d_params
+        mu, e1, e2, normal_n, s, R, t = self.map2d_params
         xy = map3d_point_to_map2d_xy((x_in, y_in, z_in), mu, e1, e2, s, R, t)
         return (float(xy[0]), float(xy[1]))
+
+    def _apply_transform_3d(self, x_in: float, y_in: float, z_in: float = 0.0) -> tuple:
+        """Converts raw 3D semantic-map coordinates into Kachaka map-frame (x, y, z)."""
+        if self.map2d_params is None:
+            self.get_logger().warn('⚠️ No 3D->2D params loaded, returning raw (x,y,z)')
+            return (x_in, y_in, z_in)
+
+        mu, e1, e2, normal_n, s, R, t = self.map2d_params
+        x_map, y_map, z_map = map3d_point_to_map_frame((x_in, y_in, z_in), mu, e1, e2, normal_n, s, R, t)
+        return (float(x_map), float(y_map), float(z_map))
+
+    def _publish_preview_goal(
+        self,
+        *,
+        event: str,
+        label: str,
+        action: str,
+        x: float,
+        y: float,
+        z: float,
+        for_grasp: bool = False,
+    ) -> None:
+        payload = {
+            "event": event,
+            "label": label,
+            "action": action,
+            "x": float(x),
+            "y": float(y),
+            "z": float(z),
+            "for_grasp": bool(for_grasp),
+            "stamp_sec": time.time(),
+        }
+        msg = String()
+        msg.data = json.dumps(payload)
+        self.preview_goal_pub.publish(msg)
+
+    def _clear_preview_goal(self, reason: str = "") -> None:
+        payload = {
+            "event": "clear",
+            "reason": reason,
+            "stamp_sec": time.time(),
+        }
+        msg = String()
+        msg.data = json.dumps(payload)
+        self.preview_goal_pub.publish(msg)
+
+    def _reset_preview_path(self, reason: str = "") -> None:
+        payload = {
+            "event": "reset_path",
+            "reason": reason,
+            "stamp_sec": time.time(),
+        }
+        msg = String()
+        msg.data = json.dumps(payload)
+        self.preview_goal_pub.publish(msg)
 
     # =============================================================
     # OBJECT QUERY WRAPPER
@@ -364,11 +425,11 @@ class DecisionMakingNode(Node):
         raw_z = result.position.z
         
         # Apply the 3D->2D calibration (plane_fit + sim2)
-        nav_x, nav_y = self._apply_transform(raw_x, raw_y, raw_z)
+        nav_x, nav_y, nav_z = self._apply_transform_3d(raw_x, raw_y, raw_z)
         
         self.get_logger().info(f"✅ Found '{object_name}'")
         self.get_logger().info(f"   Raw 3D: ({raw_x:.2f}, {raw_y:.2f})")
-        self.get_logger().info(f"   Nav 2D: ({nav_x:.2f}, {nav_y:.2f})")
+        self.get_logger().info(f"   Nav 2D: ({nav_x:.2f}, {nav_y:.2f}, {nav_z:.2f})")
         
         # Visualize on desktop map window (direct OpenCV display)
         try:
@@ -381,7 +442,7 @@ class DecisionMakingNode(Node):
         except Exception as e:
             self.get_logger().warn(f"⚠️ Visualization error: {e}")
 
-        return (nav_x, nav_y, 0.0)
+        return (nav_x, nav_y, nav_z)
 
     # =============================================================
     # NAV / GRASP / PLACE
@@ -402,6 +463,8 @@ class DecisionMakingNode(Node):
             payload = payload.strip()
             
             x, y, th = 0.0, 0.0, 0.0
+            target_z = 0.0
+            target_label = payload if payload else "nav_target"
 
             # CASE A: Planner sent coordinates (e.g., "goto:-0.27, 1.76, -0.97")
             if ',' in payload:
@@ -414,7 +477,8 @@ class DecisionMakingNode(Node):
 
                 # === APPLY TRANSFORM HERE ===
                 # The planner sends RAW 3D coordinates. We must convert to NAV coordinates.
-                x, y = self._apply_transform(raw_x, raw_y, raw_z)
+                x, y, target_z = self._apply_transform_3d(raw_x, raw_y, raw_z)
+                target_label = "nav_target"
                 
                 self.get_logger().info(f"🔄 Transformed: ({raw_x:.2f}, {raw_y:.2f}, {raw_z:.2f}) -> ({x:.2f}, {y:.2f})")
                 # show marker on map for this nav target
@@ -439,13 +503,26 @@ class DecisionMakingNode(Node):
                 self.get_logger().info(f"🔍 Looking up coordinates for '{payload}'...")
                 pos = self._query_object_position(payload) # This method already transforms
                 if not pos:
+                    self._clear_preview_goal(reason=f"query_failed:{payload}")
                     return False
-                x, y, _ = pos
+                x, y, target_z = pos
                 th = 0.0 
+                target_label = payload
+
+            self._publish_preview_goal(
+                event="active",
+                label=target_label,
+                action=cmd,
+                x=x,
+                y=y,
+                z=target_z,
+                for_grasp=for_grasp,
+            )
 
             # --- SEND TO NAV2 ---
             if not self.nav_client.wait_for_server(timeout_sec=10.0):
                 self.get_logger().error("❌ Nav2 server not available.")
+                self._clear_preview_goal(reason="nav_server_unavailable")
                 return False
 
             goal = Navigate.Goal()
@@ -460,12 +537,14 @@ class DecisionMakingNode(Node):
             while not fut.done():
                 if time.time() - start > 10.0:
                     self.get_logger().error("⏰ NAV goal send timeout")
+                    self._clear_preview_goal(reason="nav_goal_send_timeout")
                     return False
                 time.sleep(0.05)
 
             gh = fut.result()
             if not gh.accepted:
                 self.get_logger().warn("NAV goal rejected.")
+                self._clear_preview_goal(reason="nav_goal_rejected")
                 return False
 
             res_future = gh.get_result_async()
@@ -475,6 +554,7 @@ class DecisionMakingNode(Node):
                 if time.time() - start > 150.0:
                     self.get_logger().warn("⏰ NAV timeout")
                     self._send_cancel()
+                    self._clear_preview_goal(reason="nav_timeout")
                     return False
                 
                 # Early-exit shortcut: only when navigating toward an object
@@ -483,6 +563,15 @@ class DecisionMakingNode(Node):
                     self.get_logger().info(f"Within grasp threshold ({self._nav_distance_remaining:.2f}m), proceeding to grasp.")
                     gh.cancel_goal_async()
                     threshold_triggered = True
+                    self._publish_preview_goal(
+                        event="arrived",
+                        label=target_label,
+                        action=cmd,
+                        x=x,
+                        y=y,
+                        z=target_z,
+                        for_grasp=for_grasp,
+                    )
                     break
                 time.sleep(0.1)
 
@@ -490,14 +579,25 @@ class DecisionMakingNode(Node):
                 nav_result = res_future.result().result
                 if not nav_result.success:
                     self.get_logger().warn(f"❌ NAV failed: {nav_result.message}")
+                    self._clear_preview_goal(reason="nav_failed")
                     return False
             # reset flag for next invocation
             threshold_triggered = False
+            self._publish_preview_goal(
+                event="arrived",
+                label=target_label,
+                action=cmd,
+                x=x,
+                y=y,
+                z=target_z,
+                for_grasp=for_grasp,
+            )
             self.get_logger().info("✅ NAV success.")
             return True
 
         except Exception as e:
             self.get_logger().error(f"❌ NAV error: {e}")
+            self._clear_preview_goal(reason="nav_exception")
             return False
 
     def _send_task_command(self, command: str, label: str, timeout_sec: float = 300.0) -> bool:
@@ -622,12 +722,13 @@ def load_map3d_to_map2d(yaml_path: str):
                    d["plane_fit"]["mu"]["z"]], dtype=float)
     e1 = np.array(d["plane_fit"]["basis_e1"], dtype=float)
     e2 = np.array(d["plane_fit"]["basis_e2"], dtype=float)
+    normal_n = np.array(d["plane_fit"]["normal_n"], dtype=float)
 
     s = float(d["sim2"]["s"])
     R = np.array(d["sim2"]["R"], dtype=float)  # 2x2
     t = np.array([d["sim2"]["t"]["x"], d["sim2"]["t"]["y"]], dtype=float)
 
-    return mu, e1, e2, s, R, t
+    return mu, e1, e2, normal_n, s, R, t
 
 
 def map3d_point_to_map2d_xy(p_xyz, mu, e1, e2, s, R, t):
@@ -637,3 +738,14 @@ def map3d_point_to_map2d_xy(p_xyz, mu, e1, e2, s, R, t):
     uv = np.array([d @ e1, d @ e2], dtype=float)
     xy = s * (R @ uv) + t
     return xy  # (x, y)
+
+
+def map3d_point_to_map_frame(p_xyz, mu, e1, e2, normal_n, s, R, t):
+    """Project 3D point into aligned Kachaka map frame and keep scaled height."""
+    p = np.array(p_xyz, dtype=float)
+    d = p - mu
+    uv = np.array([d @ e1, d @ e2], dtype=float)
+    height = float(d @ normal_n)
+    xy = s * (R @ uv) + t
+    z = s * height
+    return float(xy[0]), float(xy[1]), float(z)

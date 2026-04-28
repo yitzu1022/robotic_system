@@ -1,5 +1,6 @@
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile
 from geometry_msgs.msg import Point
 from std_msgs.msg import String
 from object_query_interfaces.srv import ObjectQuery
@@ -12,6 +13,7 @@ import os
 import random
 from scipy.spatial.transform import Rotation as R
 from collections import defaultdict
+import yaml
 
 class ObjectQueryServer(Node):
     def __init__(self):
@@ -25,12 +27,14 @@ class ObjectQueryServer(Node):
         # self.declare_parameter('semantic_path', 'data/Util/Final_SEM_GS_converted_meta.json') old semantic labels
         self.declare_parameter('semantic_path', 'data/lab/semantic_pcd_accumulated_gaussians_meta.json')
         self.declare_parameter('instance_path', 'data/lab/accumulated_gaussians_instance_semantic_info.json')
+        self.declare_parameter('alignment_path', 'data/Util/alignment.yaml')
         self.declare_parameter('auto_align', False) 
 
         map_3d_path = self.get_parameter('3dmap_path').get_parameter_value().string_value
         map_path = self.get_parameter('map_path').get_parameter_value().string_value
         sem_path = self.get_parameter('semantic_path').get_parameter_value().string_value
         instance_path = self.get_parameter('instance_path').get_parameter_value().string_value
+        alignment_path = self.get_parameter('alignment_path').get_parameter_value().string_value
         auto_align = self.get_parameter('auto_align').get_parameter_value().bool_value
 
         # === ROS Entities ===
@@ -38,14 +42,23 @@ class ObjectQueryServer(Node):
         self.pub_objects = self.create_publisher(String, '/object_list', 10)
         self.marker_pub = self.create_publisher(MarkerArray, '/semantic_map_markers', 10)
         self.pcl_pub = self.create_publisher(PointCloud2, '/map_pointcloud', 10)
+        preview_qos = QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
+        self.candidate_pub = self.create_publisher(
+            String,
+            '/semantic_preview/object_candidates',
+            preview_qos,
+        )
 
         # === Data container ===
         self.object_db = defaultdict(list) 
+        self.object_instance_ids = defaultdict(list)
         
         self.map_points = None
         self.map_colors = None
         self.map_3d_points = None
         self.map_3d_colors = None
+        self.alignment = None
+        self.load_alignment(alignment_path)
 
         # === Load Data ===
         if os.path.exists(instance_path):
@@ -66,6 +79,85 @@ class ObjectQueryServer(Node):
         self.get_logger().info(f'✅ ObjectQuery service ready. Auto-align & Center: {auto_align}')
 
     # --------------------------------------------------------------
+    def load_alignment(self, alignment_path: str):
+        if not os.path.exists(alignment_path):
+            self.get_logger().warn(f'⚠️ alignment file not found: {alignment_path}')
+            return
+
+        try:
+            with open(alignment_path, 'r') as f:
+                data = yaml.safe_load(f)
+
+            self.alignment = {
+                'mu': np.array(
+                    [
+                        data['plane_fit']['mu']['x'],
+                        data['plane_fit']['mu']['y'],
+                        data['plane_fit']['mu']['z'],
+                    ],
+                    dtype=float,
+                ),
+                'e1': np.array(data['plane_fit']['basis_e1'], dtype=float),
+                'e2': np.array(data['plane_fit']['basis_e2'], dtype=float),
+                'normal': np.array(data['plane_fit']['normal_n'], dtype=float),
+                'scale': float(data['sim2']['s']),
+                'rot': np.array(data['sim2']['R'], dtype=float),
+                'trans': np.array([data['sim2']['t']['x'], data['sim2']['t']['y']], dtype=float),
+            }
+            self.get_logger().info(f'Loaded 3D->map alignment from {alignment_path}')
+        except Exception as e:
+            self.alignment = None
+            self.get_logger().warn(f'⚠️ Failed to load alignment file {alignment_path}: {e}')
+
+    def transform_point_to_map(self, point_xyz):
+        if self.alignment is None:
+            return float(point_xyz[0]), float(point_xyz[1]), float(point_xyz[2])
+
+        point = np.array(point_xyz, dtype=float)
+        delta = point - self.alignment['mu']
+        uv = np.array(
+            [
+                delta @ self.alignment['e1'],
+                delta @ self.alignment['e2'],
+            ],
+            dtype=float,
+        )
+        height = float(delta @ self.alignment['normal'])
+        xy = self.alignment['scale'] * (self.alignment['rot'] @ uv) + self.alignment['trans']
+        z = self.alignment['scale'] * height
+        return float(xy[0]), float(xy[1]), float(z)
+
+    def publish_candidate_options(self, name: str, instances, instance_ids):
+        payload = {
+            'event': 'active',
+            'name': name,
+            'options': [],
+        }
+        for i, pos in enumerate(instances):
+            map_x, map_y, map_z = self.transform_point_to_map(pos)
+            payload['options'].append(
+                {
+                    'index': i,
+                    'instance_id': instance_ids[i] if i < len(instance_ids) else '',
+                    'raw_x': float(pos[0]),
+                    'raw_y': float(pos[1]),
+                    'raw_z': float(pos[2]),
+                    'map_x': map_x,
+                    'map_y': map_y,
+                    'map_z': map_z,
+                }
+            )
+
+        msg = String()
+        msg.data = json.dumps(payload)
+        self.candidate_pub.publish(msg)
+
+    def clear_candidate_options(self):
+        msg = String()
+        msg.data = json.dumps({'event': 'clear'})
+        self.candidate_pub.publish(msg)
+
+    # --------------------------------------------------------------
     def load_instance_map(self, instance_path: str, map_3d_path: str):
         """Load object positions from instance JSON (centroid per instance). Also loads 3D point cloud."""
         try:
@@ -78,12 +170,14 @@ class ObjectQueryServer(Node):
                 return
 
             self.object_db.clear()
+            self.object_instance_ids.clear()
             for inst_id, inst in instances.items():
                 name = inst.get('semantic_name', 'unknown').lower()
                 centroid = inst.get('centroid', None)
                 if centroid is None or len(centroid) < 3:
                     continue
                 self.object_db[name].append(tuple(centroid))
+                self.object_instance_ids[name].append(str(inst_id))
 
             self.get_logger().info(
                 f'Loaded {len(instances)} instances {len(self.object_db)} categories from {instance_path}')
@@ -197,6 +291,7 @@ class ObjectQueryServer(Node):
 
             # 6. Build Object Database
             self.object_db.clear()
+            self.object_instance_ids.clear()
             for sid, name in id_to_name.items():
                 mask = semantic_ids == sid
                 if np.any(mask):
@@ -204,7 +299,9 @@ class ObjectQueryServer(Node):
                     min_pt = np.min(pts, axis=0)
                     max_pt = np.max(pts, axis=0)
                     centroid = (min_pt + max_pt) / 2.0
-                    self.object_db[name.lower()].append(tuple(centroid.tolist()))
+                    key = name.lower()
+                    self.object_db[key].append(tuple(centroid.tolist()))
+                    self.object_instance_ids[key].append(f'semantic_{sid}')
 
             self.get_logger().info(f'✅ Built object DB with {len(self.object_db)} categories.')
 
@@ -281,22 +378,40 @@ class ObjectQueryServer(Node):
     def search_object(self, name: str):
         if name in self.object_db:
             instances = self.object_db[name]
-            "Let user to choose the object position if multiple instances exist (e.g. multiple chairs)."
+            instance_ids = self.object_instance_ids.get(name, [])
             if len(instances) > 1:
-                self.get_logger().info(f"Multiple instances of '{name}' found. Selecting one randomly for query response.")
+                self.get_logger().info(f"Multiple instances of '{name}' found. Waiting for user selection.")
+                self.publish_candidate_options(name, instances, instance_ids)
                 for i, inst in enumerate(instances):
-                    self.get_logger().info(f"  [{i}] Position: ({inst[0]:.2f}, {inst[1]:.2f}, {inst[2]:.2f})")
-                choosen_index = input(f"Multiple instances of '{name}' found. Enter index (0-{len(instances)-1}) to select, or press Enter for random: ")
+                    instance_id = instance_ids[i] if i < len(instance_ids) else 'n/a'
+                    map_x, map_y, map_z = self.transform_point_to_map(inst)
+                    self.get_logger().info(
+                        f"  [{i}] instance_id={instance_id} "
+                        f"raw=({inst[0]:.2f}, {inst[1]:.2f}, {inst[2]:.2f}) "
+                        f"map=({map_x:.2f}, {map_y:.2f}, {map_z:.2f})"
+                    )
+                choosen_index = input(
+                    f"Multiple instances of '{name}' found. Enter index (0-{len(instances)-1}) to select, "
+                    "or press Enter for random: "
+                )
+                selected_idx = None
                 if choosen_index.isdigit():
                     idx = int(choosen_index)
                     if 0 <= idx < len(instances):
-                        return True, Point(x=instances[idx][0], y=instances[idx][1], z=instances[idx][2])
+                        selected_idx = idx
                     else:
                         self.get_logger().warn(f"Invalid index entered. Selecting randomly.")
+                if selected_idx is None:
+                    selected_idx = random.randrange(len(instances))
+                    self.get_logger().info(f"Randomly selected index [{selected_idx}] for '{name}'.")
+                self.clear_candidate_options()
+                best_pt = instances[selected_idx]
             else:
                 best_pt = min(instances, key=lambda p: p[0]**2 + p[1]**2 + p[2]**2)
+                self.clear_candidate_options()
             return True, Point(x=best_pt[0], y=best_pt[1], z=best_pt[2])
         else:
+            self.clear_candidate_options()
             return False, Point(x=0.0, y=0.0, z=0.0)
 
     def publish_object_list(self):
