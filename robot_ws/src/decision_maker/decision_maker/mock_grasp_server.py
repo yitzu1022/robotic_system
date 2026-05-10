@@ -2,13 +2,13 @@ import time
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
-from decision_maker_interfaces.action import TaskCommand
+from mm_interface.action import TaskCommand
 
 
 class MockGraspPlaceServer(Node):
     def __init__(self):
         super().__init__('mock_grasp_place_server')
-        # Unified TaskCommand action server — handles both grasp and handover commands
+        # Unified TaskCommand action server handles grasp, place, and handover commands.
         self.task_server = ActionServer(
             self,
             TaskCommand,
@@ -33,8 +33,10 @@ class MockGraspPlaceServer(Node):
 
         if command.startswith('grasp'):
             phases = ['approach', 'align', 'close_gripper', 'lift', 'done']
+        elif command.startswith('place'):
+            phases = ['move_to_target', 'lower', 'open_gripper', 'retract', 'done']
         elif command.startswith('handover'):
-            phases = ['move_to_bin', 'lower', 'open_gripper', 'retract', 'done']
+            phases = ['move_to_person', 'wait_for_take', 'open_gripper', 'retract', 'done']
         else:
             self.get_logger().warn(f'Unknown command: "{command}"')
             goal_handle.succeed()

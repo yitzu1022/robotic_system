@@ -16,7 +16,6 @@ from rclpy.action import ActionClient
 
 from std_msgs.msg import String
 from kachaka_interfaces.action import Navigate
-# from decision_maker_interfaces.action import TaskCommand
 from mm_interface.action import TaskCommand
 from object_query_interfaces.srv import ObjectQuery
 
@@ -319,6 +318,10 @@ class DecisionMakingNode(Node):
             elif act.startswith('place:'):
                 self.get_logger().info(f"📦 Executing {act}")
                 if not self._execute_place(act):
+                    return False
+            elif act.startswith('handover:'):
+                self.get_logger().info(f"🤝 Executing {act}")
+                if not self._execute_handover(act):
                     return False
             else:
                 self.get_logger().warn(f"⚠️ Unknown action: {act}")
@@ -654,8 +657,18 @@ class DecisionMakingNode(Node):
         return self._send_task_command(f'grasp the {obj}', 'GRASP', timeout_sec=300.0)
 
     def _execute_place(self, cmd: str) -> bool:
-        dest = cmd.split(':', 1)[1].strip()
-        return self._send_task_command(f'handover {dest}', 'HANDOVER', timeout_sec=300.0)
+        payload = cmd.split(':', 1)[1].strip()
+        parts = [part.strip() for part in payload.split(':', 1)]
+        if len(parts) == 2 and parts[0] and parts[1]:
+            obj, dest = parts
+            return self._send_task_command(f'place {obj} to {dest}', 'PLACE', timeout_sec=300.0)
+
+        # Legacy primitive form: "place:<destination>".
+        return self._send_task_command(f'place to {payload}', 'PLACE', timeout_sec=300.0)
+
+    def _execute_handover(self, cmd: str) -> bool:
+        obj = cmd.split(':', 1)[1].strip()
+        return self._send_task_command(f'handover {obj}', 'HANDOVER', timeout_sec=300.0)
 
     # =============================================================
     # FEEDBACK / CANCEL / UTILITIES
