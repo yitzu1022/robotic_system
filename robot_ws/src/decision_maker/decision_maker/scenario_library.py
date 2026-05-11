@@ -39,7 +39,7 @@ def give_item(model: WorldModel, item: str, dest: str = "me") -> List[str]:
         fmt_goto(obj_pose),
         f"grasp:{item}",
         fmt_goto(dest_pose),
-        f"place:{dest}",
+        f"handover:{item}",
     ]
 
 def park_robot(model: WorldModel) -> List[str]:
@@ -55,7 +55,7 @@ def clean_table(model: WorldModel) -> List[str]:
         fmt_goto(table_pose),
         f"grasp:trash",
         fmt_goto(bin_pose),
-        f"place:trash_bin",
+        "place:trash:trash_bin",
     ]
 
 def fetch_drink(model: WorldModel) -> List[str]:
@@ -66,20 +66,23 @@ def fetch_drink(model: WorldModel) -> List[str]:
         fmt_goto(fridge_pose),
         "grasp:drink",
         fmt_goto(me_pose),
-        "place:me",
+        "handover:drink",
     ]
     
 _PREPOSITIONS = r'(?:on|in|at|near|by|inside|from|above|below|under|beside|next\s+to)'
 
-def go_from(model: WorldModel, arg: str) -> List[str]:
+def _strip_article(text: str) -> str:
+    return re.sub(r'^(the|a|an)\s+', '', text.strip())
+
+def _parse_transfer_args(arg: str):
     """
-    Parse "bring <object> [on/in/at/near... <location>] to <destination>".
+    Parse "<object> [on/in/at/near/from... <location>] to <destination>".
 
     Examples:
-      "bring the bottle on cabinet to table"
-        => goto:cabinet, grasp:bottle, goto:table, place:obj
-      "bring bottle to table"
-        => goto:bottle,  grasp:bottle, goto:table, place:obj
+      "the bottle on cabinet to table"
+        => obj=bottle, nav_target=cabinet, dest=table
+      "bottle to table"
+        => obj=bottle, nav_target=bottle, dest=table
     """
     s = arg.strip().lower()
     # remove leading "from"
@@ -95,11 +98,11 @@ def go_from(model: WorldModel, arg: str) -> List[str]:
         if len(parts) >= 2:
             src, dest = parts[0], parts[1]
         else:
-            raise ValueError(f"Cannot parse 'bring' arguments: '{arg}'")
+            raise ValueError(f"Cannot parse transfer arguments: '{arg}'")
 
     # Strip articles from both sides
-    src = re.sub(r'^(the|a|an)\s+', '', src)
-    dest = re.sub(r'^(the|a|an)\s+', '', dest)
+    src = _strip_article(src)
+    dest = _strip_article(dest)
     # Strip any trailing preposition phrase from destination (e.g. "table on left")
     dest = re.split(r'\s+' + _PREPOSITIONS + r'\s+', dest)[0].strip()
 
@@ -112,7 +115,41 @@ def go_from(model: WorldModel, arg: str) -> List[str]:
         obj = src.strip()
         nav_target = obj                              # navigate to the object itself
 
-    return [f"goto:{nav_target}", f"grasp:{obj}", f"goto:{dest}", f"place:{obj}"]
+    obj = _strip_article(obj)
+    nav_target = _strip_article(nav_target)
+
+    if not obj or not nav_target or not dest:
+        raise ValueError(f"Cannot parse transfer arguments: '{arg}'")
+
+    return obj, nav_target, dest
+
+def _transfer_steps(obj: str, nav_target: str, dest: str, final_action: str) -> List[str]:
+    if final_action == "place":
+        final_step = f"place:{obj}:{dest}"
+    elif final_action == "handover":
+        final_step = f"handover:{obj}"
+    else:
+        raise ValueError(f"Unsupported final action: '{final_action}'")
+    return [f"goto:{nav_target}", f"grasp:{obj}", f"goto:{dest}", final_step]
+
+def go_from(model: WorldModel, arg: str) -> List[str]:
+    """
+    Parse "bring <object> [on/in/at/near... <location>] to <destination>".
+
+    "bring" keeps the existing behavior and ends with a handover.
+    """
+    obj, nav_target, dest = _parse_transfer_args(arg)
+    return _transfer_steps(obj, nav_target, dest, "handover")
+
+def place_from(model: WorldModel, arg: str) -> List[str]:
+    """Parse "place <object> [on/in/from... <location>] to <destination>"."""
+    obj, nav_target, dest = _parse_transfer_args(arg)
+    return _transfer_steps(obj, nav_target, dest, "place")
+
+def handover_from(model: WorldModel, arg: str) -> List[str]:
+    """Parse "handover <object> [on/in/from... <location>] to <destination>"."""
+    obj, nav_target, dest = _parse_transfer_args(arg)
+    return _transfer_steps(obj, nav_target, dest, "handover")
 
 def test_arm(model: WorldModel) -> List[str]:
     """Scenario to test grasp and place actions."""
@@ -134,5 +171,7 @@ SCENARIO_REGISTRY = {
     # === NEW COMMAND ===
     "go to": go_to_target,
     "bring": go_from,  # Example of a new scenario that could be added
+    "place": place_from,
+    "handover": handover_from,
     "test arm": test_arm, # scenario to test grasp and place
 }

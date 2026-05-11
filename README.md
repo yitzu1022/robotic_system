@@ -285,22 +285,26 @@ Those primitives use a very small internal language:
 - `goto:x,y,theta` for direct coordinate navigation
 - `goto:name` for symbolic navigation that will be resolved later
 - `grasp:item`
-- `place:destination`
+- `place:item:destination` for placing an item at a target location
+- `handover:item` for handing an item to a person or receiver at the current target
+- `place:destination` as a legacy/test shorthand still accepted by the executor
 
 The main scenario functions are:
 
 - `go_to_target(model, target)`: resolve a place or object and produce a single navigation step
-- `give_item(model, item, dest="me")`: navigate to an object, grasp it, navigate to the destination, and place it
+- `give_item(model, item, dest="me")`: navigate to an object, grasp it, navigate to the destination, and hand it over
 - `park_robot(model)`: return to `home`
 - `clean_table(model)`: go to `table`, pick `trash`, and move it to `trash_bin` or `home`
 - `fetch_drink(model)`: go from `fridge` to `me`
 - `test_arm(model)`: emit a pure manipulation sequence for testing
 
-The most implementation-heavy function is `go_from(model, arg)`, which parses commands of the form:
+The transfer command parser handles commands of the form:
 
 - `bring bottle to table`
 - `bring the bottle on cabinet to table`
 - `bring apple from shelf to me`
+- `place the bottle on table to chair`
+- `handover the bottle on sofa to table`
 
 Its parsing strategy is deliberately lightweight:
 
@@ -316,11 +320,16 @@ For example, `bring bottle on cabinet to table` becomes a primitive sequence con
 - navigate to `cabinet`
 - grasp `bottle`
 - navigate to `table`
-- place at `table`
+- hand over `bottle`
+
+The `place` and `handover` prefixes use the same source/destination parser, but choose different final manipulation primitives:
+
+- `place the bottle on table to chair` becomes `goto:table`, `grasp:bottle`, `goto:chair`, `place:bottle:chair`
+- `handover the bottle on sofa to table` becomes `goto:sofa`, `grasp:bottle`, `goto:table`, `handover:bottle`
 
 The registry at the bottom of the file is the bridge into `decision_maker_node.py`:
 
-- `SCENARIO_REGISTRY` maps fixed text prefixes such as `go to`, `bring`, `give me`, and `go home` to Python functions
+- `SCENARIO_REGISTRY` maps fixed text prefixes such as `go to`, `bring`, `place`, `handover`, `give me`, and `go home` to Python functions
 - `decision_maker_node.py` performs prefix matching against this registry
 - once a key matches, the remaining text is passed as that scenario's argument string
 
@@ -369,6 +378,7 @@ The command-handling flow is as follows.
 - `_execute_nav()` for `goto:...`
 - `_execute_grasp()` for `grasp:...`
 - `_execute_place()` for `place:...`
+- `_execute_handover()` for `handover:...`
 
 The navigation path inside `_execute_nav()` is the most important part of the file.
 
@@ -394,11 +404,12 @@ For symbolic form, it:
 
 During action execution, `_execute_nav()` also monitors `distance_remaining` feedback from the navigation action. If the next primitive is a grasp and the robot gets within `grasp_approach_dist`, the node cancels the remaining navigation path early and immediately proceeds to the grasp step. That shortcut is what allows the system to stop close enough for manipulation instead of insisting on exact pose convergence.
 
-Manipulation is intentionally simpler but the latest code now behaves more like a grasp-plus-handover dispatcher than a generic place executor:
+Manipulation is intentionally simple: the executor converts internal primitives into text commands for the `mm_interface` `TaskCommand` server.
 
 - `_execute_grasp()` waits `5` seconds, then converts `grasp:item` into a `TaskCommand` goal like `grasp the apple`
-- `_execute_place()` converts `place:dest` into a handover-style command string: `handover <dest>` since the grasp and place server currently only supports handover behavior
-- `_send_task_command()` handles goal sending, waiting, feedback logging, timeout, and success checking for both operations
+- `_execute_place()` converts `place:item:destination` into a `TaskCommand` goal like `place bottle to chair`
+- `_execute_handover()` converts `handover:item` into a `TaskCommand` goal like `handover bottle`
+- `_send_task_command()` handles goal sending, waiting, feedback logging, timeout, and success checking for manipulation operations
 
 The file also contains explicit cancellation and cleanup behavior:
 
@@ -1055,6 +1066,8 @@ Example input after the node starts:
 go to chair
 bring bottle to table
 bring apple on cabinet to table
+place the bottle on table to chair
+handover the bottle on sofa to table
 give me apple
 go home
 ```
@@ -1094,4 +1107,4 @@ ros2 run decision_maker decision_maker_node --ros-args \
 ros2 run decision_maker nl_command_node
 ```
 
-At this point, type commands such as `go to chair` or `bring bottle to table` in the `nl_command_node` terminal.
+At this point, type commands such as `go to chair`, `bring bottle to table`, `place the bottle on table to chair`, or `handover the bottle on sofa to table` in the `nl_command_node` terminal.
