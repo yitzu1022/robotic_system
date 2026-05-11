@@ -297,7 +297,7 @@ class DecisionMakingNode(Node):
 
             self.cmd_queue.task_done()
 
-    def _execute_batch(self, name: str, actions: List[str], timeout_sec: float = 300.0) -> bool:
+    def _execute_batch(self, name: str, actions: List[str], timeout_sec: float = 900.0) -> bool:
         start_time = time.time()
         for i, act in enumerate(actions):
             if time.time() - start_time > timeout_sec:
@@ -551,7 +551,7 @@ class DecisionMakingNode(Node):
             start = time.time()
             threshold_triggered = False
             while not res_future.done():
-                if time.time() - start > 150.0:
+                if time.time() - start > 900.0:
                     self.get_logger().warn("⏰ NAV timeout")
                     self._send_cancel()
                     self._clear_preview_goal(reason="nav_timeout")
@@ -600,7 +600,7 @@ class DecisionMakingNode(Node):
             self._clear_preview_goal(reason="nav_exception")
             return False
 
-    def _send_task_command(self, command: str, label: str, timeout_sec: float = 300.0) -> bool:
+    def _send_task_command(self, command: str, label: str, timeout_sec: float = 900.0) -> bool:
         """Send a TaskCommand goal and wait for the result. Used by both grasp and place."""
         try:
             if not self.task_client.wait_for_server(timeout_sec=5.0):
@@ -655,7 +655,8 @@ class DecisionMakingNode(Node):
 
     def _execute_place(self, cmd: str) -> bool:
         dest = cmd.split(':', 1)[1].strip()
-        return self._send_task_command(f'handover {dest}', 'HANDOVER', timeout_sec=300.0)
+        return self._send_task_command(f'place {dest}', 'PLACE', timeout_sec=300.0)
+        # return self._send_task_command(f'handover {dest}', 'HANDOVER', timeout_sec=300.0)
 
     # =============================================================
     # FEEDBACK / CANCEL / UTILITIES
