@@ -1118,7 +1118,7 @@ At this point, type commands such as `go to chair`, `bring bottle to table`, `pl
 This section describes the RViz2 visualization path used to inspect semantic instances, transformed map points, robot pose, navigation goals, and execution progress. The main helper script is:
 
 ```text
-/home/weichen/robotic-project/robot_ws/tools/show_selected_instance_markers.py
+/robot_ws/tools/show_selected_instance_markers.py
 ```
 
 Inside the runtime container, the equivalent path is usually:
