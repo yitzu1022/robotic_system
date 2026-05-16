@@ -27,9 +27,9 @@
 - [9. Visualization with RViz2](#section-9-visualization-with-rviz2)
 
 ![Diagram](./architecture.png)
-<a id="section-1-executive-summary"></a>
 
-## 1. Executive Summary
+<details>
+<summary id="section-1-executive-summary"><strong>1. Executive Summary</strong></summary>
 
 This repository is a ROS 2 workspace that integrates command interpretation, semantic object lookup, mobile navigation, map alignment, pose extraction, LiDAR acquisition, and a prototype semantic SLAM service. The workspace is organized around Python-based ROS 2 application packages and several interface packages that define custom actions and services. In addition to runtime code, the repository includes precomputed semantic map data, alignment assets, generated build outputs, and utility scripts for converting and validating map representations.
 
@@ -45,9 +45,10 @@ From a system perspective, the workspace implements a perception-to-action pipel
 
 The workspace therefore functions as a multi-package robotics application focused on semantic task execution in a mapped indoor environment.
 
-<a id="section-2-repository-structure"></a>
+</details>
 
-## 2. Repository Structure
+<details>
+<summary id="section-2-repository-structure"><strong>2. Repository Structure</strong></summary>
 
 The repository root contains the container definition, the ROS 2 workspace, and a few supporting directories:
 
@@ -102,9 +103,10 @@ The `src/` directory contains the following ROS 2 packages:
 
 The `build/`, `install/`, and `log/` directories are generated artifacts rather than hand-maintained source code. They are still relevant because they confirm that the workspace has been built repeatedly and recently.
 
-<a id="section-3-environment-and-dependency-configuration"></a>
+</details>
 
-## 3. Environment and Dependency Configuration
+<details>
+<summary id="section-3-environment-and-dependency-configuration"><strong>3. Environment and Dependency Configuration</strong></summary>
 
 ### 3.1 `requirement.txt`
 
@@ -170,9 +172,10 @@ docker exec -it robotic_system bash
 
 If you need to add or change Python packages, ROS packages, or system dependencies, modify `~/robotic/robotic_system/Dockerfile` and rebuild the container rather than performing ad hoc installs in a running shell.
 
-<a id="section-4-package-by-package-technical-analysis"></a>
+</details>
 
-## 4. Package Descriptions
+<details>
+<summary id="section-4-package-by-package-technical-analysis"><strong>4. Package Descriptions</strong></summary>
 
 The detailed subsections below focus on the core packages used in the main semantic-navigation pipeline. Supporting interface or prototype packages such as `decision_maker_interfaces`, `semantic_slam`, and `semantic_slam_interfaces` are still part of the repository and are summarized in sections 2 and 5.
 
@@ -781,9 +784,10 @@ This package defines the semantic lookup service contract.
 
 This service is the main interface between symbolic task commands and semantic map perception.
 
-<a id="section-5-custom-ros-interfaces-summary"></a>
+</details>
 
-## 5. Custom ROS Interfaces Summary
+<details>
+<summary id="section-5-custom-ros-interfaces-summary"><strong>5. Custom ROS Interfaces Summary</strong></summary>
 
 The workspace defines several custom interfaces that form the contract between packages:
 
@@ -797,9 +801,10 @@ The workspace defines several custom interfaces that form the contract between p
 
 Both `mm_interface` and `decision_maker_interfaces` define a `TaskCommand.action`. In the current tree, `decision_maker/decision_maker_node.py` imports `mm_interface.action.TaskCommand`, while some mock or experimental code still references `decision_maker_interfaces`.
 
-<a id="section-6-data-assets-and-utility-scripts"></a>
+</details>
 
-## 6. Runtime Data Assets and Alignment Utilities
+<details>
+<summary id="section-6-data-assets-and-utility-scripts"><strong>6. Runtime Data Assets and Alignment Utilities</strong></summary>
 
 <a id="section-61-datautil"></a>
 
@@ -894,9 +899,10 @@ Important limitation:
 - this script outputs a `Sim(2)` calibration result, not the full `plane_fit + sim2` YAML structure expected by `decision_maker_node.py`
 - the runtime node still reads `/robot_ws/data/Util/alignment.yaml`, so the output of `map_alignment_v2.py` should be treated as an intermediate calibration artifact rather than a direct drop-in replacement
 
-<a id="section-7-runtime-interaction-between-packages"></a>
+</details>
 
-## 7. Runtime Interaction Between Packages
+<details>
+<summary id="section-7-runtime-interaction-between-packages"><strong>7. Runtime Interaction Between Packages</strong></summary>
 
 The intended integrated workflow is as follows:
 
@@ -939,9 +945,10 @@ The intended integrated workflow is as follows:
 
 This interaction pattern confirms that the workspace is not a collection of isolated experiments; it is an integrated semantic-task robotics stack centered on ROS 2 message passing and action/service composition.
 
-<a id="section-8-practical-setup-and-execution-guide"></a>
+</details>
 
-## 8. Setup and Execution Guide
+<details>
+<summary id="section-8-practical-setup-and-execution-guide"><strong>8. Setup and Execution Guide</strong></summary>
 
 This section is written for developers using Jetson Thor. Docker Compose is assumed to live under `~/robotic`, the repository is assumed to be checked out at `~/robotic/robotic_system`, and runtime commands are expected to be executed inside the `robotic_system` container.
 
@@ -1103,9 +1110,10 @@ ros2 run decision_maker nl_command_node
 
 At this point, type commands such as `go to chair`, `bring bottle to table`, `place the bottle on table to chair`, or `handover the bottle on sofa to table` in the `nl_command_node` terminal.
 
-<a id="section-9-visualization-with-rviz2"></a>
+</details>
 
-## 9. Visualization with RViz2
+<details>
+<summary id="section-9-visualization-with-rviz2"><strong>9. Visualization with RViz2</strong></summary>
 
 This section describes the RViz2 visualization path used to inspect semantic instances, transformed map points, robot pose, navigation goals, and execution progress. The main helper script is:
 
@@ -1289,3 +1297,5 @@ ros2 run decision_maker nl_command_node
 ```
 
 When a command such as `place the bottle on table to chair` is executed, the visualization publisher will show candidate instances from object query, the active navigation target from `decision_maker_node.py`, the robot pose arrow, and the accumulated trajectory in RViz2.
+
+</details>
