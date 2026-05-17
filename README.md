@@ -26,7 +26,7 @@
 - [8. Setup and Execution Guide](#section-8-practical-setup-and-execution-guide)
 - [9. Visualization with RViz2](#section-9-visualization-with-rviz2)
 
-![Diagram](./architecture.png)
+![Diagram](./system_pipeline.png)
 
 <details>
 <summary id="section-1-executive-summary"><strong>1. Executive Summary</strong></summary>
@@ -56,7 +56,7 @@ The repository root contains the container definition, the ROS 2 workspace, and 
 robotic_system/
 ├── Dockerfile          # Development image definition
 ├── entrypoint.sh       # Container startup script
-├── architecture.png    # System overview diagram
+├── system_pipeline.png    # System overview diagram
 ├── robot_ws/           # ROS 2 workspace
 │   ├── src/            # ROS 2 source packages
 │   ├── data/           # Semantic maps, alignment files, utilities, and lab assets
