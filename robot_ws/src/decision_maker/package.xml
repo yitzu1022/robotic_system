@@ -27,6 +27,8 @@
   <exec_depend>ros2launch</exec_depend>
   <exec_depend>decision_maker_interfaces</exec_depend>
   <exec_depend>mm_interface</exec_depend>
+  <exec_depend>object_query_interfaces</exec_depend>
+  <exec_depend>kachaka_interfaces</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

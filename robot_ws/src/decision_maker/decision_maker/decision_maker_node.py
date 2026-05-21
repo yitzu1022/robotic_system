@@ -128,8 +128,8 @@ class MapVisualizer:
 
 
 class DecisionMakingNode(Node):
-    def __init__(self):
-        super().__init__('decision_making_node')
+    def __init__(self, node_name: str = 'decision_making_node'):
+        super().__init__(node_name)
 
         # ====== Core setup ======
         self.cmd_queue: "queue.Queue[dict]" = queue.Queue(maxsize=50)
@@ -165,17 +165,27 @@ class DecisionMakingNode(Node):
         # ====== Map visualizer (direct OpenCV display) ======
         # Optional parameter to point to map yaml (PNG must be next to it)
         try:
+            self.declare_parameter('enable_map_visualizer', True)
+            enable_map_visualizer = (
+                self.get_parameter('enable_map_visualizer')
+                .get_parameter_value()
+                .bool_value
+            )
             self.declare_parameter('map_yaml', 'data/lab/kachaka_native.yaml')
             map_yaml = self.get_parameter('map_yaml').get_parameter_value().string_value
-            if map_yaml and not os.path.isabs(map_yaml):
+            if not enable_map_visualizer:
+                self.get_logger().info("MapVisualizer disabled by parameter.")
+                self.visualizer = None
+            elif map_yaml and not os.path.isabs(map_yaml):
                 map_yaml = os.path.abspath(map_yaml)
-            if map_yaml and os.path.exists(map_yaml):
+
+            if enable_map_visualizer and map_yaml and os.path.exists(map_yaml):
                 try:
                     self.visualizer = MapVisualizer(map_yaml, self.get_logger())
                 except Exception as e:
                     self.get_logger().error(f"❌ Failed to init MapVisualizer: {e}")
                     self.visualizer = None
-            else:
+            elif enable_map_visualizer:
                 self.visualizer = None
         except Exception:
             self.visualizer = None
@@ -657,11 +667,6 @@ class DecisionMakingNode(Node):
         return self._send_task_command(f'grasp the {obj}', 'GRASP', timeout_sec=300.0)
 
     def _execute_place(self, cmd: str) -> bool:
-<<<<<<< HEAD
-        dest = cmd.split(':', 1)[1].strip()
-        return self._send_task_command(f'place {dest}', 'PLACE', timeout_sec=300.0)
-        # return self._send_task_command(f'handover {dest}', 'HANDOVER', timeout_sec=300.0)
-=======
         payload = cmd.split(':', 1)[1].strip()
         parts = [part.strip() for part in payload.split(':', 1)]
         if len(parts) == 2 and parts[0] and parts[1]:
@@ -674,7 +679,6 @@ class DecisionMakingNode(Node):
     def _execute_handover(self, cmd: str) -> bool:
         obj = cmd.split(':', 1)[1].strip()
         return self._send_task_command(f'handover {obj}', 'HANDOVER', timeout_sec=300.0)
->>>>>>> f3d94b527b089f0735202ad3d974137243cbb97e
 
     # =============================================================
     # FEEDBACK / CANCEL / UTILITIES

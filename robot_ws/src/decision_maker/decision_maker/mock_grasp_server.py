@@ -34,13 +34,9 @@ class MockGraspPlaceServer(Node):
         if command.startswith('grasp'):
             phases = ['approach', 'align', 'close_gripper', 'lift', 'done']
         elif command.startswith('place'):
-<<<<<<< HEAD
-            phases = ['move_to_bin', 'lower', 'open_gripper', 'retract', 'done']
-=======
             phases = ['move_to_target', 'lower', 'open_gripper', 'retract', 'done']
         elif command.startswith('handover'):
             phases = ['move_to_person', 'wait_for_take', 'open_gripper', 'retract', 'done']
->>>>>>> f3d94b527b089f0735202ad3d974137243cbb97e
         else:
             self.get_logger().warn(f'Unknown command: "{command}"')
             goal_handle.succeed()

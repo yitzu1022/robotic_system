@@ -29,8 +29,11 @@ setup(
     entry_points={
         'console_scripts': [
             "decision_maker_node = decision_maker.decision_maker_node:main",
+            "agent_decision_maker_node = decision_maker.agent_decision_maker_node:main",
             "text_command_node = decision_maker.text_command_node:main",
             'mock_nav_server = decision_maker.mock_nav_server:main',
+            'mock_kachaka_nav_server = decision_maker.mock_kachaka_nav_server:main',
+            'mock_object_query_server = decision_maker.mock_object_query_server:main',
             'mock_grasp_server = decision_maker.mock_grasp_server:main',
             "cancel_command_node = decision_maker.cancel_command_node:main",
             'nl_command_node = decision_maker.nl_command_node:main',

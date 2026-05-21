@@ -8,3 +8,7 @@ matplotlib
 pandas
 scikit-learn
 transforms3d
+transformers>=4.57.0
+accelerate
+safetensors
+kernels
