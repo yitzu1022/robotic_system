@@ -20,13 +20,16 @@ class ObjectQueryServer(Node):
         super().__init__('object_query_server')
 
         # === Declare parameters ===
-        # self.declare_parameter('3dmap_path', 'data/Util/Final_GS.npz') old scene map
-        self.declare_parameter('3dmap_path', 'data/lab/accumulated_gaussians.npz')
-        # self.declare_parameter('map_path', 'data/Util/Final_SEM_GS_converted.npz') old semantic map
-        self.declare_parameter('map_path', 'data/lab/semantic_pcd_accumulated_gaussians.npz')
-        # self.declare_parameter('semantic_path', 'data/Util/Final_SEM_GS_converted_meta.json') old semantic labels
+        # self.declare_parameter('3dmap_path', 'data/lab/accumulated_gaussians.npz') predemo
+        self.declare_parameter('3dmap_path', 'data/lab/test/robot_deploy_slam_example0_rgb_color.npz')
+
+        # self.declare_parameter('map_path', 'data/lab/semantic_pcd_accumulated_gaussians.npz') predemo
+        self.declare_parameter('map_path', 'data/lab/test/robot_deploy_slam_example0_inst_color.npz')
+
         self.declare_parameter('semantic_path', 'data/lab/semantic_pcd_accumulated_gaussians_meta.json')
-        self.declare_parameter('instance_path', 'data/lab/accumulated_gaussians_instance_semantic_info.json')
+        # self.declare_parameter('instance_path', 'data/lab/accumulated_gaussians_instance_semantic_info.json') predemo
+        self.declare_parameter('instance_path', 'data/lab/test/robot_deploy_slam_example0_instance_semantic_table.json')
+
         self.declare_parameter('alignment_path', 'data/Util/alignment.yaml')
         self.declare_parameter('auto_align', False) 
 
@@ -171,16 +174,66 @@ class ObjectQueryServer(Node):
 
             self.object_db.clear()
             self.object_instance_ids.clear()
-            for inst_id, inst in instances.items():
-                name = inst.get('semantic_name', 'unknown').lower()
-                centroid = inst.get('centroid', None)
-                if centroid is None or len(centroid) < 3:
+
+            if isinstance(instances, dict):
+                instance_iter = instances.items()
+                total_instances = len(instances)
+            elif isinstance(instances, list):
+                instance_iter = (
+                    (str(inst.get('inst_id', i)), inst)
+                    for i, inst in enumerate(instances)
+                    if isinstance(inst, dict)
+                )
+                total_instances = len(instances)
+            else:
+                self.get_logger().error(
+                    f'❌ Unsupported "instances" format in {instance_path}: {type(instances).__name__}'
+                )
+                return
+
+            loaded_instances = 0
+            skipped_instances = 0
+            for inst_id, inst in instance_iter:
+                if inst.get('filtered', False):
+                    skipped_instances += 1
                     continue
-                self.object_db[name].append(tuple(centroid))
+
+                raw_name = (
+                    inst.get('semantic_name')
+                    or inst.get('class_name')
+                    or inst.get('category_name')
+                    or inst.get('label')
+                    or 'unknown'
+                )
+                name = str(raw_name).strip().lower() or 'unknown'
+                centroid = inst.get('centroid') or inst.get('center')
+
+                if centroid is None and 'bbox_min' in inst and 'bbox_max' in inst:
+                    bbox_min = inst.get('bbox_min')
+                    bbox_max = inst.get('bbox_max')
+                    if (
+                        isinstance(bbox_min, list) and len(bbox_min) >= 3
+                        and isinstance(bbox_max, list) and len(bbox_max) >= 3
+                    ):
+                        centroid = [
+                            (float(bbox_min[0]) + float(bbox_max[0])) / 2.0,
+                            (float(bbox_min[1]) + float(bbox_max[1])) / 2.0,
+                            (float(bbox_min[2]) + float(bbox_max[2])) / 2.0,
+                        ]
+
+                if centroid is None or len(centroid) < 3:
+                    skipped_instances += 1
+                    continue
+
+                self.object_db[name].append(
+                    (float(centroid[0]), float(centroid[1]), float(centroid[2]))
+                )
                 self.object_instance_ids[name].append(str(inst_id))
+                loaded_instances += 1
 
             self.get_logger().info(
-                f'Loaded {len(instances)} instances {len(self.object_db)} categories from {instance_path}')
+                f'Loaded {loaded_instances}/{total_instances} instances '
+                f'({skipped_instances} skipped), {len(self.object_db)} categories from {instance_path}')
 
             # Load 3D point cloud for visualization
             if os.path.exists(map_3d_path):
