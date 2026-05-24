@@ -1,25 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-3D Map (Uni3R/3DGS) to 2D LiDAR Map Alignment (OFFLINE-POSE FRIENDLY)
-====================================================================
-
-你目前的情境：
-- camera pose 只能離線從 Uni3R / 重建流程產生 (poses.txt)
-- 2D LiDAR map 下的 base pose 也可離線從 rosbag / TF 擷取成檔案 (poses_2d.txt)
-
-本程式的設計：
-1) 讀取離線 2D base poses 檔
-2) 讀取離線 3D camera poses 檔
-3) (可選) 3D camera -> 3D base 轉換 (用 base->camera 外參)
-4) 自動處理時間域：起點歸一化 + time scale + time offset 搜尋
-5) 用 RANSAC + 非線性 refine 估 SE(2) : (tx, ty, yaw)，可選估 scale
-6) 輸出 map_2d -> map_3d 的靜態 TF + yaml 結果 + command.sh
-
-注意：
-- 不再「即時收 TF」，而是改成讀 poses_2d_file
-- 嚴格只對齊平面 (x,y,yaw)，避免 z / roll/pitch 汙染
-"""
 
 import os
 import json
