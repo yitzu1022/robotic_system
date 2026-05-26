@@ -14,7 +14,7 @@ from typing import Any, Dict, Iterable, List
 
 
 SUPPORTED_ACTIONS = {"goto", "grasp", "place", "handover"}
-SUPPORTED_CAPABILITIES = {"object_query", "navigation", "grasp_place", "finish"}
+SUPPORTED_CAPABILITIES = {"object_query", "navigation", "grasp_place", "robot_pose", "finish"}
 SUPPORTED_GRASP_PLACE_ACTIONS = {"grasp", "place"}
 
 
@@ -107,22 +107,40 @@ class QwenClient:
                 {"action": "handover", "target": item},
             ]
 
+        if text.startswith("move "):
+            transfers = _try_parse_transfer_sequence(text) or []
+            steps = []
+            for obj, nav_target, dest, item_final_action, _fallback_source in transfers:
+                final_step = {"action": item_final_action, "target": obj}
+                if item_final_action == "place":
+                    final_step["destination"] = dest
+                steps.extend([
+                    {"action": "goto", "target": nav_target},
+                    {"action": "grasp", "target": obj},
+                    {"action": "goto", "target": dest},
+                    final_step,
+                ])
+            return steps
+
         for prefix, final_action in (
             ("bring ", "place"),
             ("place ", "place"),
             ("handover ", "handover"),
         ):
             if text.startswith(prefix):
-                obj, nav_target, dest = _parse_transfer(text[len(prefix) :])
-                final_step = {"action": final_action, "target": obj}
-                if final_action == "place":
-                    final_step["destination"] = dest
-                return [
-                    {"action": "goto", "target": nav_target},
-                    {"action": "grasp", "target": obj},
-                    {"action": "goto", "target": dest},
-                    final_step,
-                ]
+                transfers = _parse_transfer_sequence(text[len(prefix) :], final_action)
+                steps = []
+                for obj, nav_target, dest, item_final_action, _fallback_source in transfers:
+                    final_step = {"action": item_final_action, "target": obj}
+                    if item_final_action == "place":
+                        final_step["destination"] = dest
+                    steps.extend([
+                        {"action": "goto", "target": nav_target},
+                        {"action": "grasp", "target": obj},
+                        {"action": "goto", "target": dest},
+                        final_step,
+                    ])
+                return steps
 
         return []
 
@@ -133,14 +151,10 @@ class QwenClient:
         history: List[dict],
         last_execution_result: dict | None,
     ) -> dict:
-        transfer = _try_parse_transfer_command(text)
-        if transfer is not None:
-            obj, nav_target, dest, final_action = transfer
-            call = _expected_transfer_capability(
-                obj,
-                nav_target,
-                dest,
-                final_action,
+        transfer_sequence = _try_parse_transfer_sequence(text)
+        if transfer_sequence is not None:
+            call = _expected_transfer_sequence_capability(
+                transfer_sequence,
                 len(history),
                 current_state,
                 last_execution_result,
@@ -191,6 +205,20 @@ class QwenClient:
                 current_state,
                 last_execution_result,
             )
+
+        if _is_robot_pose_query(text):
+            script = [
+                {
+                    "capability": "robot_pose",
+                    "reason": "Need to observe the robot's current pose.",
+                },
+                {
+                    "capability": "finish",
+                    "task_done": True,
+                    "reason": "The robot pose has been reported.",
+                },
+            ]
+            return script[min(len(history), len(script) - 1)]
 
         raise PlanValidationError(
             "QwenClient placeholder could not decide the next capability for this task."
@@ -396,6 +424,7 @@ class QwenClient:
                 "place steps must include destination.",
                 "Use symbolic names such as apple or table, not coordinates.",
                 "For '<object> on/in/at/from <source> to <destination>', goto the source, grasp only the object, then goto the destination.",
+                "For multiple objects joined by and/commas, decompose into one transfer per object; never use the combined list as a target.",
                 "Never use combined phrases such as 'pringle on cabinet' as a target.",
                 "Return exactly one JSON object and no extra text.",
             ],
@@ -423,8 +452,12 @@ class QwenClient:
                 "grasp_place action must be grasp or place.",
                 "grasp requires target.",
                 "place requires target and destination.",
+                "robot_pose returns the robot current pose and requires no target.",
                 "finish requires task_done true and should only be used after the task is complete.",
-                "For '<object> on/in/at/from <source> to <destination>', query and navigate to source before grasping object.",
+                "For 'move <object> from <source> to <destination>', first try object_query on the object. If the object lookup fails, query the source and navigate there.",
+                "For '<object> on/in/at/from <source> to <destination>', first try object_query on the object. If the object lookup fails, query the source and navigate there.",
+                "If a capability failed, use last_execution_result to select a corrected next call instead of stopping.",
+                "For multiple objects joined by and/commas, move one object at a time through source, grasp, destination, and place.",
                 "Return exactly one JSON object and no extra text.",
             ],
             "examples": [
@@ -561,6 +594,10 @@ def validate_capability_call(call: Dict[str, Any]) -> Dict[str, Any]:
         normalized["target"] = _required_top_level_string(call, "target")
         if action == "place":
             normalized["destination"] = _required_top_level_string(call, "destination")
+    elif capability == "robot_pose":
+        frame = call.get("frame")
+        if isinstance(frame, str) and frame.strip():
+            normalized["frame"] = frame.strip().lower()
     elif capability == "finish":
         if call.get("task_done") is not True:
             raise PlanValidationError("finish requires task_done=true.")
@@ -577,16 +614,19 @@ def normalize_capability_call(
     call: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Ground next capability calls for common transfer commands."""
-    transfer = _try_parse_transfer_command(original_task)
-    if transfer is None:
+    transfer_sequence = _try_parse_transfer_sequence(original_task)
+    if transfer_sequence is None:
         return call
 
-    obj, nav_target, dest, final_action = transfer
-    expected = _expected_transfer_capability(
-        obj,
-        nav_target,
-        dest,
-        final_action,
+    # Multi-object transfer decomposition is intentionally left to the LLM.
+    # The harness feeds PLANNING.md/SKILLS.md/OUTPUT_FORMAT.md at task start so
+    # the model can reason through each object. We keep deterministic grounding
+    # only for single-object transfer safety and for the placeholder backend.
+    if _is_multi_object_transfer_sequence(transfer_sequence):
+        return call
+
+    expected = _expected_transfer_sequence_capability(
+        transfer_sequence,
         len(history),
         current_state,
         last_execution_result,
@@ -609,17 +649,44 @@ def _expected_transfer_capability(
     current_state: dict,
     last_execution_result: dict | None,
 ) -> dict | None:
-    script = [
-        {"capability": "object_query", "target": nav_target, "reason": "Need to locate the source before navigation."},
-        {"capability": "navigation", "target": nav_target, "reason": "Navigate to the source location."},
-        {"capability": "grasp_place", "action": "grasp", "target": obj, "reason": "Grasp the target object at the source."},
-        {"capability": "object_query", "target": dest, "reason": "Need to locate the destination before placing the object."},
-        {"capability": "navigation", "target": dest, "reason": "Navigate to the destination."},
-    ]
-    if final_action == "place":
-        script.append(
-            {"capability": "grasp_place", "action": "place", "target": obj, "destination": dest, "reason": "Place the object at the destination."}
+    return _expected_transfer_sequence_capability(
+        [(obj, nav_target, dest, final_action, None)],
+        step_index,
+        current_state,
+        last_execution_result,
+    )
+
+
+def _expected_transfer_sequence_capability(
+    transfers: List[tuple[str, str, str, str, str | None]],
+    step_index: int,
+    current_state: dict,
+    last_execution_result: dict | None,
+) -> dict | None:
+    script = []
+    for obj, primary_target, dest, final_action, fallback_source in transfers:
+        source_target = _resolve_source_target(
+            obj,
+            primary_target,
+            fallback_source,
+            current_state,
+            last_execution_result,
         )
+        script.extend([
+            {"capability": "object_query", "target": source_target, "reason": f"Need to locate the source for {obj}."},
+            {"capability": "navigation", "target": source_target, "reason": f"Navigate to the source for {obj}."},
+            {"capability": "grasp_place", "action": "grasp", "target": obj, "reason": f"Grasp {obj} at the source."},
+            {"capability": "object_query", "target": dest, "reason": f"Need to locate the destination before placing {obj}."},
+            {"capability": "navigation", "target": dest, "reason": f"Navigate to the destination for {obj}."},
+        ])
+        if final_action == "place":
+            script.append(
+                {"capability": "grasp_place", "action": "place", "target": obj, "destination": dest, "reason": f"Place {obj} at the destination."}
+            )
+        elif final_action == "handover":
+            script.append(
+                {"capability": "grasp_place", "action": "place", "target": obj, "destination": dest, "reason": f"Hand over {obj} at the destination."}
+            )
     script.append({"capability": "finish", "task_done": True, "reason": "The transfer task is complete."})
 
     call = dict(script[min(step_index, len(script) - 1)])
@@ -637,25 +704,56 @@ def _expected_transfer_capability(
     return call
 
 
+def _resolve_source_target(
+    obj: str,
+    primary_target: str,
+    fallback_source: str | None,
+    current_state: dict,
+    last_execution_result: dict | None,
+) -> str:
+    known_poses = current_state.get("known_poses", {})
+    if primary_target in known_poses:
+        return primary_target
+
+    if fallback_source:
+        if fallback_source in known_poses:
+            return fallback_source
+        if last_execution_result and last_execution_result.get("last_action") == "object_query":
+            last_target = last_execution_result.get("target")
+            if last_target == primary_target and last_execution_result.get("success") is False:
+                return fallback_source
+            if last_target == fallback_source and last_execution_result.get("success"):
+                return fallback_source
+
+    return primary_target
+
+
 def normalize_plan(task_instruction: str, plan: Dict[str, Any]) -> Dict[str, Any]:
     """Apply deterministic safety normalization to an LLM-produced plan."""
-    transfer = _try_parse_transfer_command(task_instruction)
-    if transfer is None:
+    transfer_sequence = _try_parse_transfer_sequence(task_instruction)
+    if transfer_sequence is None:
         return plan
 
-    obj, nav_target, dest, final_action = transfer
-    final_step = {"action": final_action, "target": obj}
-    if final_action == "place":
-        final_step["destination"] = dest
+    # Let the LLM own multi-object decomposition in single-shot comparisons.
+    # Placeholder plans are already decomposed before this normalization step.
+    if _is_multi_object_transfer_sequence(transfer_sequence):
+        return plan
 
-    return {
-        "task": plan.get("task") or task_instruction.strip(),
-        "steps": [
+    steps = []
+    for obj, nav_target, dest, final_action, _fallback_source in transfer_sequence:
+        final_step = {"action": final_action, "target": obj}
+        if final_action == "place":
+            final_step["destination"] = dest
+        steps.extend([
             {"action": "goto", "target": nav_target},
             {"action": "grasp", "target": obj},
             {"action": "goto", "target": dest},
             final_step,
-        ],
+        ])
+
+    return {
+        "task": plan.get("task") or task_instruction.strip(),
+        "steps": steps,
     }
 
 
@@ -748,8 +846,57 @@ def _required_string(step: Dict[str, Any], key: str, index: int) -> str:
 _PREPOSITIONS = r"(?:on|in|at|near|by|inside|from|above|below|under|beside|next\s+to)"
 
 
-def _try_parse_transfer_command(task_instruction: str) -> tuple[str, str, str, str] | None:
+def _is_robot_pose_query(text: str) -> bool:
+    normalized = text.strip().lower()
+    english_patterns = (
+        "where are you",
+        "where is the robot",
+        "where is robot",
+        "current robot pose",
+        "current robot position",
+        "robot current pose",
+        "robot current position",
+        "get robot pose",
+        "get current pose",
+    )
+    if any(pattern in normalized for pattern in english_patterns):
+        return True
+
+    chinese_patterns = (
+        "現在位置",
+        "目前位置",
+        "機器人位置",
+        "機器人在哪",
+        "你在哪",
+    )
+    return any(pattern in normalized for pattern in chinese_patterns)
+
+
+def _is_multi_object_transfer_sequence(transfers: List[tuple[str, str, str, str, str | None]]) -> bool:
+    return len(transfers) > 1
+
+
+def _try_parse_transfer_command(task_instruction: str) -> tuple[str, str, str, str, str | None] | None:
+    sequence = _try_parse_transfer_sequence(task_instruction)
+    if not sequence:
+        return None
+    return sequence[0]
+
+
+def _try_parse_transfer_sequence(task_instruction: str) -> List[tuple[str, str, str, str, str | None]] | None:
     text = task_instruction.strip().lower()
+    if text.startswith("move "):
+        match = re.match(r"^move\s+(.+?)\s+from\s+(.+?)\s+to\s+(.+)$", text)
+        if not match:
+            return None
+        object_phrase, source, destination = match.groups()
+        destination = _clean_phrase(re.split(r"\s+" + _PREPOSITIONS + r"\s+", destination)[0])
+        source = _clean_phrase(source)
+        objects = _split_object_list(object_phrase)
+        if not objects or not source or not destination:
+            return None
+        return [(obj, obj, destination, "place", source) for obj in objects]
+
     for prefix, final_action in (
         ("bring ", "place"),
         ("place ", "place"),
@@ -757,14 +904,18 @@ def _try_parse_transfer_command(task_instruction: str) -> tuple[str, str, str, s
     ):
         if text.startswith(prefix):
             try:
-                obj, nav_target, dest = _parse_transfer(text[len(prefix) :])
+                return _parse_transfer_sequence(text[len(prefix) :], final_action)
             except PlanValidationError:
                 return None
-            return obj, nav_target, dest, final_action
     return None
 
 
 def _parse_transfer(arg: str) -> tuple[str, str, str]:
+    first = _parse_transfer_sequence(arg, "place")[0]
+    return first[:3]
+
+
+def _parse_transfer_sequence(arg: str, final_action: str) -> List[tuple[str, str, str, str, str | None]]:
     text = arg.strip().lower()
     text = re.sub(r"^\s*from\s+", "", text)
 
@@ -783,16 +934,30 @@ def _parse_transfer(arg: str) -> tuple[str, str, str]:
 
     prep_match = re.search(r"\s+" + _PREPOSITIONS + r"\s+", src)
     if prep_match:
-        obj = _clean_phrase(src[: prep_match.start()])
-        nav_target = _clean_phrase(src[prep_match.end() :])
+        obj_phrase = _clean_phrase(src[: prep_match.start()])
+        shared_nav_target = _clean_phrase(src[prep_match.end() :])
     else:
-        obj = src
-        nav_target = src
+        obj_phrase = src
+        shared_nav_target = None
 
-    if not obj or not nav_target or not dest:
+    objects = _split_object_list(obj_phrase)
+    if not objects or not dest:
         raise PlanValidationError(f"Cannot parse transfer task: '{arg}'.")
 
-    return obj, nav_target, dest
+    transfers = []
+    for obj in objects:
+        primary_target = obj
+        fallback_source = shared_nav_target
+        if not obj or not primary_target:
+            raise PlanValidationError(f"Cannot parse transfer task: '{arg}'.")
+        transfers.append((obj, primary_target, dest, final_action, fallback_source))
+    return transfers
+
+
+def _split_object_list(text: str) -> List[str]:
+    normalized = re.sub(r"\s*,\s*and\s+", ", ", text.strip().lower())
+    parts = re.split(r"\s*(?:,|\band\b)\s*", normalized)
+    return [_clean_phrase(part) for part in parts if _clean_phrase(part)]
 
 
 def _clean_phrase(text: str) -> str:

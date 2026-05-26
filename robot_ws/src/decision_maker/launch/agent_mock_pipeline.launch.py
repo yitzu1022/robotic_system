@@ -14,7 +14,11 @@ def generate_launch_description():
                     {
                         "enable_map_visualizer": False,
                         "mock_execution": True,
-                        "agent_max_steps": 10,
+                        "mock_object_query": False,
+                        "mock_failure_rate": 0.0,
+                        "mock_fail_once_capabilities": "navigation",
+                        "agent_max_steps": 25,
+                        "agent_max_replans": 2,
                     }
                 ],
             ),

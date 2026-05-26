@@ -29,6 +29,7 @@
   <exec_depend>mm_interface</exec_depend>
   <exec_depend>object_query_interfaces</exec_depend>
   <exec_depend>kachaka_interfaces</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>
