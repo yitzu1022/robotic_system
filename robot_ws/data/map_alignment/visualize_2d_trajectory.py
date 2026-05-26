@@ -35,7 +35,7 @@ def load_pose2d_csv(path: Path, t_col="t_sec", x_col="x", y_col="y", delimiter="
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--pose2d_csv", default="./poses.csv")
+    ap.add_argument("--pose2d_csv", default="./pose2d.csv")
     # CSV columns
     ap.add_argument("--csv_t", default="t_sec")
     ap.add_argument("--csv_x", default="x")
@@ -44,7 +44,7 @@ def main():
 
     args = ap.parse_args()
 
-    out_prefix = Path("./output/trajectory_2d")
+    out_prefix = Path("alignment_out/trajectory_2d")
     out_prefix.parent.mkdir(parents=True, exist_ok=True)
 
     pose2d = load_pose2d_csv(Path(args.pose2d_csv),
