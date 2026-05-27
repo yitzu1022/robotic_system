@@ -787,10 +787,7 @@ source /opt/ros/humble/setup.bash
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate robot_ros
 source install/setup.bash
-ros2 run object_query object_query_server --ros-args \
-  -p 3dmap_path:=/robotic-project/robot_ws/data/Util/Final_GS.npz \
-  -p map_path:=/robotic-project/robot_ws/data/Util/Final_SEM_GS_converted.npz \
-  -p semantic_path:=/robotic-project/robot_ws/data/Util/Final_SEM_GS_converted_meta.json
+ros2 run object_query object_query_server
 ```
 
 After the object query server receive the searching request, it will search for the corresponding instance in the semantic map.
@@ -798,17 +795,15 @@ After the object query server receive the searching request, it will search for 
 When there is many semantic instances in the map, user should choose which instance to navigate to, grasp, or place on by looking at the RViz visualization of the semantic map and queried markers.
 
 #### Terminal 2: Navigation Server
-
+##### the kachaka_ip need to change to the actual IP address of the kachaka robot connected to.
 ```bash
 cd /robotic-project/robot_ws
 source /opt/ros/humble/setup.bash
-source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate robot_ros
 source install/setup.bash
+export PYTHONPATH=$PYTHONPATH:/opt/conda/envs/robot_ros/lib/python3.10/site-packages
 ros2 run kachaka_nav modular_nav_node --ros-args \
-  -p use_sim:=false \
   -p kachaka_ip:=192.168.0.157:26400 \
-  -p use_native_map:=true
 ```
 
 #### Terminal 3: Decision Maker Node
@@ -816,12 +811,9 @@ ros2 run kachaka_nav modular_nav_node --ros-args \
 ```bash
 cd /robotic-project/robot_ws
 source /opt/ros/humble/setup.bash
-source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate robot_ros
 source install/setup.bash
-ros2 run decision_maker decision_maker_node --ros-args \
-  -p map3d_to_map2d_yaml:=/robotic-project/robot_ws/data/Util/alignment.yaml \
-  -p map_yaml:=/robotic-project/robot_ws/data/lab/kachaka_native.yaml
+ros2 run decision_maker decision_maker_node
 ```
 
 #### Terminal 4: Natural-Language Command Input
@@ -829,7 +821,6 @@ ros2 run decision_maker decision_maker_node --ros-args \
 ```bash
 cd /robotic-project/robot_ws
 source /opt/ros/humble/setup.bash
-source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate robot_ros
 source install/setup.bash
 ros2 run decision_maker nl_command_node

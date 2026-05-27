@@ -24,11 +24,12 @@
 - [6.3 `data/map_alignment`](#section-63-datamapalignment)
 - [7. Runtime Interaction Between Packages](#section-7-runtime-interaction-between-packages)
 - [8. Setup and Execution Guide](#section-8-practical-setup-and-execution-guide)
+- [9. Visualization with RViz2](#section-9-visualization-with-rviz2)
 
-![Diagram](./architecture.png)
-<a id="section-1-executive-summary"></a>
+![Diagram](./system_pipeline.png)
 
-## 1. Executive Summary
+<details>
+<summary id="section-1-executive-summary"><strong>1. Executive Summary</strong></summary>
 
 This repository is a ROS 2 workspace that integrates command interpretation, semantic object lookup, mobile navigation, map alignment, pose extraction, LiDAR acquisition, and a prototype semantic SLAM service. The workspace is organized around Python-based ROS 2 application packages and several interface packages that define custom actions and services. In addition to runtime code, the repository includes precomputed semantic map data, alignment assets, generated build outputs, and utility scripts for converting and validating map representations.
 
@@ -44,9 +45,10 @@ From a system perspective, the workspace implements a perception-to-action pipel
 
 The workspace therefore functions as a multi-package robotics application focused on semantic task execution in a mapped indoor environment.
 
-<a id="section-2-repository-structure"></a>
+</details>
 
-## 2. Repository Structure
+<details>
+<summary id="section-2-repository-structure"><strong>2. Repository Structure</strong></summary>
 
 The repository root contains the container definition, the ROS 2 workspace, and a few supporting directories:
 
@@ -54,7 +56,7 @@ The repository root contains the container definition, the ROS 2 workspace, and 
 robotic_system/
 ├── Dockerfile          # Development image definition
 ├── entrypoint.sh       # Container startup script
-├── architecture.png    # System overview diagram
+├── system_pipeline.png    # System overview diagram
 ├── robot_ws/           # ROS 2 workspace
 │   ├── src/            # ROS 2 source packages
 │   ├── data/           # Semantic maps, alignment files, utilities, and lab assets
@@ -101,9 +103,10 @@ The `src/` directory contains the following ROS 2 packages:
 
 The `build/`, `install/`, and `log/` directories are generated artifacts rather than hand-maintained source code. They are still relevant because they confirm that the workspace has been built repeatedly and recently.
 
-<a id="section-3-environment-and-dependency-configuration"></a>
+</details>
 
-## 3. Environment and Dependency Configuration
+<details>
+<summary id="section-3-environment-and-dependency-configuration"><strong>3. Environment and Dependency Configuration</strong></summary>
 
 ### 3.1 `requirement.txt`
 
@@ -169,9 +172,10 @@ docker exec -it robotic_system bash
 
 If you need to add or change Python packages, ROS packages, or system dependencies, modify `~/robotic/robotic_system/Dockerfile` and rebuild the container rather than performing ad hoc installs in a running shell.
 
-<a id="section-4-package-by-package-technical-analysis"></a>
+</details>
 
-## 4. Package Descriptions
+<details>
+<summary id="section-4-package-by-package-technical-analysis"><strong>4. Package Descriptions</strong></summary>
 
 The detailed subsections below focus on the core packages used in the main semantic-navigation pipeline. Supporting interface or prototype packages such as `decision_maker_interfaces`, `semantic_slam`, and `semantic_slam_interfaces` are still part of the repository and are summarized in sections 2 and 5.
 
@@ -780,9 +784,10 @@ This package defines the semantic lookup service contract.
 
 This service is the main interface between symbolic task commands and semantic map perception.
 
-<a id="section-5-custom-ros-interfaces-summary"></a>
+</details>
 
-## 5. Custom ROS Interfaces Summary
+<details>
+<summary id="section-5-custom-ros-interfaces-summary"><strong>5. Custom ROS Interfaces Summary</strong></summary>
 
 The workspace defines several custom interfaces that form the contract between packages:
 
@@ -796,9 +801,10 @@ The workspace defines several custom interfaces that form the contract between p
 
 Both `mm_interface` and `decision_maker_interfaces` define a `TaskCommand.action`. In the current tree, `decision_maker/decision_maker_node.py` imports `mm_interface.action.TaskCommand`, while some mock or experimental code still references `decision_maker_interfaces`.
 
-<a id="section-6-data-assets-and-utility-scripts"></a>
+</details>
 
-## 6. Runtime Data Assets and Alignment Utilities
+<details>
+<summary id="section-6-data-assets-and-utility-scripts"><strong>6. Runtime Data Assets and Alignment Utilities</strong></summary>
 
 <a id="section-61-datautil"></a>
 
@@ -893,9 +899,10 @@ Important limitation:
 - this script outputs a `Sim(2)` calibration result, not the full `plane_fit + sim2` YAML structure expected by `decision_maker_node.py`
 - the runtime node still reads `/robot_ws/data/Util/alignment.yaml`, so the output of `map_alignment_v2.py` should be treated as an intermediate calibration artifact rather than a direct drop-in replacement
 
-<a id="section-7-runtime-interaction-between-packages"></a>
+</details>
 
-## 7. Runtime Interaction Between Packages
+<details>
+<summary id="section-7-runtime-interaction-between-packages"><strong>7. Runtime Interaction Between Packages</strong></summary>
 
 The intended integrated workflow is as follows:
 
@@ -938,9 +945,10 @@ The intended integrated workflow is as follows:
 
 This interaction pattern confirms that the workspace is not a collection of isolated experiments; it is an integrated semantic-task robotics stack centered on ROS 2 message passing and action/service composition.
 
-<a id="section-8-practical-setup-and-execution-guide"></a>
+</details>
 
-## 8. Setup and Execution Guide
+<details>
+<summary id="section-8-practical-setup-and-execution-guide"><strong>8. Setup and Execution Guide</strong></summary>
 
 This section is written for developers using Jetson Thor. Docker Compose is assumed to live under `~/robotic`, the repository is assumed to be checked out at `~/robotic/robotic_system`, and runtime commands are expected to be executed inside the `robotic_system` container.
 
@@ -1047,9 +1055,7 @@ The main executable is `decision_maker_node`. It expects:
 - optionally, a valid 2D map YAML for OpenCV visualization
 
 ```bash
-ros2 run decision_maker decision_maker_node --ros-args \
-  -p map3d_to_map2d_yaml:=/robot_ws/data/Util/alignment.yaml \
-  -p map_yaml:=/robot_ws/data/lab/kachaka_native.yaml
+ros2 run decision_maker decision_maker_node
 ```
 
 ### 8.5.4 Start `nl_command_node`
@@ -1079,26 +1085,21 @@ For an integrated manual test of the semantic navigation stack, open several hos
 #### Terminal 1: Object Query Service
 
 ```bash
-ros2 run object_query object_query_server --ros-args \
-  -p 3dmap_path:=/robot_ws/data/lab/accumulated_gaussians.npz \
-  -p instance_path:=/robot_ws/data/lab/accumulated_gaussians_instance_semantic_info.json
+ros2 run object_query object_query_server
 ```
 
 #### Terminal 2: Navigation Server
-
+##### The Kachaka ip address need to modify according to the actual ip address of the real robot
 ```bash
+export PYTHONPATH=$PYTHONPATH:/opt/conda/envs/robot_ros/lib/python3.10/site-packages
 ros2 run kachaka_nav modular_nav_node --ros-args \
-  -p use_sim:=false \
   -p kachaka_ip:=192.168.0.157:26400 \
-  -p use_native_map:=true
 ```
 
 #### Terminal 3: Decision Maker Node
 
 ```bash
-ros2 run decision_maker decision_maker_node --ros-args \
-  -p map3d_to_map2d_yaml:=/robot_ws/data/Util/alignment.yaml \
-  -p map_yaml:=/robot_ws/data/lab/kachaka_native.yaml
+ros2 run decision_maker decision_maker_node
 ```
 
 #### Terminal 4: Natural-Language Command Input
@@ -1108,3 +1109,193 @@ ros2 run decision_maker nl_command_node
 ```
 
 At this point, type commands such as `go to chair`, `bring bottle to table`, `place the bottle on table to chair`, or `handover the bottle on sofa to table` in the `nl_command_node` terminal.
+
+</details>
+
+<details>
+<summary id="section-9-visualization-with-rviz2"><strong>9. Visualization with RViz2</strong></summary>
+
+This section describes the RViz2 visualization path used to inspect semantic instances, transformed map points, robot pose, navigation goals, and execution progress. The main helper script is:
+
+```text
+/robot_ws/tools/show_selected_instance_markers.py
+```
+
+Inside the runtime container, the equivalent path is usually:
+
+```text
+/robot_ws/tools/show_selected_instance_markers.py
+```
+
+This visualization stack is read-only. It publishes RViz-friendly markers and point clouds, but it does not command navigation or manipulation by itself.
+
+### 9.1 What the Marker Tool Publishes
+
+`show_selected_instance_markers.py` creates a ROS 2 node named `selected_instance_marker_publisher`. It publishes:
+
+| Topic | Type | Purpose |
+|---|---|---|
+| `/semantic_map_markers_preview` | `visualization_msgs/MarkerArray` | Selected semantic instance markers, runtime goal marker, candidate instance markers, robot arrow, and robot trail |
+| `/semantic_map_preview_path` | `nav_msgs/Path` | Robot trajectory accumulated from pose updates |
+| `/aligned_map_pointcloud_preview` | `sensor_msgs/PointCloud2` | 3D semantic map point cloud transformed into the 2D Kachaka `map` frame |
+
+It also subscribes to:
+
+| Topic | Type | Producer | Purpose |
+|---|---|---|---|
+| `/kachaka_pose` | `geometry_msgs/PoseStamped` | pose publisher / robot stack | Primary robot pose source |
+| `/semantic_preview/current_goal` | `std_msgs/String` JSON | `decision_maker_node.py` | Current navigation goal, goal clear events, and path reset events |
+| `/semantic_preview/object_candidates` | `std_msgs/String` JSON | `object_query_server.py` | Candidate semantic instances when several objects share the same label |
+
+If `/kachaka_pose` is unavailable or stale, the tool can fall back to TF lookup from `map` to `base_link`. This fallback is enabled by default and can be disabled with `--disable-tf-fallback`.
+
+### 9.2 How It Works
+
+The visualization logic follows this pipeline:
+
+1. Load semantic instances from `accumulated_gaussians_instance_semantic_info.json`.
+2. Resolve optional command-line selections such as `table:0` or `chair:2` into instance centroids.
+3. Load `alignment.yaml`, including the fitted plane basis and `sim2` transform.
+4. Convert raw 3D semantic-map coordinates into the Kachaka `map` frame.
+5. Load `accumulated_gaussians.npz`, transform the full point cloud into the same `map` frame, optionally stride/filter it, and publish it as `PointCloud2`.
+6. Subscribe to robot pose or TF and append pose samples into a `nav_msgs/Path`.
+7. Subscribe to `decision_maker_node.py` preview goals and draw the active navigation target.
+8. Subscribe to `object_query_server.py` candidate options and draw all available candidate instances for the queried object class.
+9. Publish one `MarkerArray` each cycle, first sending `DELETEALL` so RViz always reflects the latest state.
+
+Marker colors are used as status cues:
+
+- red: active runtime or selected goal
+- yellow: reached/waiting goal
+- green: completed selected goal
+- blue: robot pose arrow
+- cyan: robot trail
+- purple: candidate object instances from object query
+- gray: reference goals when a runtime goal is active
+
+### 9.3 Start the Marker Publisher
+
+Run this in a shell initialized as in section 8.3:
+
+```bash
+cd /robot_ws
+source /opt/ros/humble/setup.bash
+source /opt/conda/etc/profile.d/conda.sh
+conda activate robot_ros
+source install/setup.bash
+```
+
+To publish the transformed semantic point cloud, runtime goal markers, candidate markers, robot pose arrow, and path without any fixed reference selections:
+
+```bash
+python3 tools/show_selected_instance_markers.py
+```
+
+To also mark specific semantic instances as reference goals, pass selections in `object:index` form:
+
+```bash
+python3 tools/show_selected_instance_markers.py table:0 chair:0 sofa:0
+```
+
+The default data paths are:
+
+```text
+instance JSON: /robot_ws/data/lab/accumulated_gaussians_instance_semantic_info.json
+alignment YAML: /robot_ws/data/Util/alignment.yaml
+point cloud NPZ: /robot_ws/data/lab/accumulated_gaussians.npz
+```
+
+Use explicit paths when running from a different working directory:
+
+```bash
+python3 /robot_ws/tools/show_selected_instance_markers.py table:0 chair:0 \
+  --instance-path /robot_ws/data/lab/accumulated_gaussians_instance_semantic_info.json \
+  --alignment-path /robot_ws/data/Util/alignment.yaml \
+  --pointcloud-path /robot_ws/data/lab/accumulated_gaussians.npz
+```
+
+Useful options:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--topic` | `/semantic_map_markers_preview` | Output `MarkerArray` topic |
+| `--path-topic` | `/semantic_map_preview_path` | Output robot path topic |
+| `--pointcloud-topic` | `/aligned_map_pointcloud_preview` | Output transformed point cloud topic |
+| `--frame-id` | `map` | Frame used by markers, path, and point cloud |
+| `--pose-topic` | `/kachaka_pose` | Primary robot pose topic |
+| `--runtime-goal-topic` | `/semantic_preview/current_goal` | Current-goal preview topic from `decision_maker_node.py` |
+| `--candidate-topic` | `/semantic_preview/object_candidates` | Candidate preview topic from `object_query_server.py` |
+| `--pointcloud-stride` | `2` | Publish every Nth point to reduce RViz load |
+| `--pointcloud-max-z` | `1.8` | Keep only transformed cloud points at or below this map-frame Z |
+| `--dry-run` | off | Print transformed coordinates for selected instances without creating a ROS node |
+
+Example coordinate check:
+
+```bash
+python3 tools/show_selected_instance_markers.py table:0 --dry-run
+```
+
+### 9.4 Start RViz2
+
+Open another initialized shell and start RViz2:
+
+```bash
+rviz2
+```
+
+In RViz2:
+
+1. Set `Global Options` -> `Fixed Frame` to `map`.
+2. Add `PointCloud2` and set its topic to `/aligned_map_pointcloud_preview`.
+3. Add `MarkerArray` and set its topic to `/semantic_map_markers_preview`.
+4. Add `Path` and set its topic to `/semantic_map_preview_path`.
+5. Optionally add `MarkerArray` on `/semantic_map_markers` to see query-scoped markers directly from `object_query_server.py`.
+6. Optionally add `PointCloud2` on `/map_pointcloud` to compare the object-query server's original map cloud with the aligned preview cloud.
+
+If RViz becomes slow, increase `--pointcloud-stride`, lower `--pointcloud-max-z`, or temporarily remove the point-cloud display.
+
+### 9.5 Typical Multi-Terminal Visualization Run
+
+Use this alongside the system run described in section 8.6:
+
+#### Terminal 1: Object Query
+
+```bash
+ros2 run object_query object_query_server
+```
+
+#### Terminal 2: Navigation
+
+```bash
+ros2 run kachaka_nav modular_nav_node --ros-args \
+  -p kachaka_ip:=192.168.0.157:26400
+```
+
+#### Terminal 3: Decision Maker
+
+```bash
+ros2 run decision_maker decision_maker_node
+```
+
+#### Terminal 4: Marker Publisher
+
+```bash
+# run in the docker
+python3 tools/show_selected_instance_markers.py
+```
+
+#### Terminal 5: RViz2
+
+```bash
+rviz2
+```
+
+#### Terminal 6: Natural-Language Command Input
+
+```bash
+ros2 run decision_maker nl_command_node
+```
+
+When a command such as `place the bottle on table to chair` is executed, the visualization publisher will show candidate instances from object query, the active navigation target from `decision_maker_node.py`, the robot pose arrow, and the accumulated trajectory in RViz2.
+
+</details>
